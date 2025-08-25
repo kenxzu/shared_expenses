@@ -1,9 +1,9 @@
 "use client";
 import "./App.css";
 
-import { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { firebaseConfig, appId as importedAppId } from "./firebaseConfig";
-
+import { getAnalytics } from "firebase/analytics";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -117,13 +117,14 @@ export default function ExpenseManagerApp() {
   // --- Firebase Initialization ---
   useEffect(() => {
     try {
-      if (!firebaseConfig) {
+      if (!firebaseConfig.apiKey) {
         setError("Firebase configuration is missing.");
         setLoading(false);
         return;
       }
 
       const app = initializeApp(firebaseConfig);
+      const analytics = getAnalytics(app);
       const firestoreDb = getFirestore(app);
       const firebaseAuth = getAuth(app);
 
