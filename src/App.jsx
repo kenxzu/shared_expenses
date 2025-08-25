@@ -114,6 +114,28 @@ export default function ExpenseManagerApp() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const appId = importedAppId;
+
+  useEffect(() => {
+    let title = "Expense Manager"; // Default title
+    switch (activeTab) {
+      case "dashboard":
+        title = "Dashboard | Expense Manager";
+        break;
+      case "addExpense":
+        title = "Add Expense | Expense Manager";
+        break;
+      case "addPayment":
+        title = "Add Payment | Expense Manager";
+        break;
+      case "manageUsers":
+        title = "Manage Users | Expense Manager";
+        break;
+      default:
+        title = "Expense Manager";
+    }
+    document.title = title;
+  }, [activeTab]);
+
   // --- Firebase Initialization ---
   useEffect(() => {
     try {
