@@ -113,6 +113,12 @@ export default function ExpenseManagerApp() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [showLogin, setShowLogin] = useState(false);
+
+  // --- Admin Auth State ---
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const appId = importedAppId;
 
   useEffect(() => {
@@ -144,38 +150,27 @@ export default function ExpenseManagerApp() {
         setLoading(false);
         return;
       }
-
       const app = initializeApp(firebaseConfig);
       const analytics = getAnalytics(app);
       const firestoreDb = getFirestore(app);
       const firebaseAuth = getAuth(app);
-
       setDb(firestoreDb);
       setAuth(firebaseAuth);
       setLogLevel("debug");
-
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
         if (user) {
           setUserId(user.uid);
-        } else {
-          try {
-            if (
-              typeof __initial_auth_token !== "undefined" &&
-              __initial_auth_token
-            ) {
-              await signInWithCustomToken(firebaseAuth, __initial_auth_token);
-            } else {
-              await signInAnonymously(firebaseAuth);
-            }
-          } catch (authError) {
-            console.error("Authentication Error:", authError);
-            setError("Failed to authenticate. Please refresh the page.");
+          if (user.email === "admin@sharedexpenses.com") {
+            setIsAdmin(true);
+          } else {
+            setIsAdmin(false);
           }
+        } else {
+          setIsAdmin(false);
         }
         setIsAuthReady(true);
         setLoading(false);
       });
-
       return () => unsubscribe();
     } catch (e) {
       console.error("Firebase Init Error:", e);
@@ -306,6 +301,31 @@ export default function ExpenseManagerApp() {
     }
   };
 
+  // --- Admin Login Handler ---
+  const handleAdminLogin = async (e) => {
+    e.preventDefault();
+    if (!loginEmail || !loginPassword) {
+      setError("Please enter email and password.");
+      return;
+    }
+    try {
+      const { signInWithEmailAndPassword } = await import("firebase/auth");
+      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      setShowLogin(false);
+      setError("");
+    } catch (err) {
+      setError("Login failed. Check your credentials.");
+    }
+  };
+
+  // --- Admin Logout Handler ---
+  const handleAdminLogout = async () => {
+    const { signOut } = await import("firebase/auth");
+    await signOut(auth);
+    setIsAdmin(false);
+    setShowLogin(false);
+  };
+
   // --- Balance Calculation ---
   const balances = useMemo(() => {
     if (users.length === 0) return { balances: [], simplifiedDebts: [] };
@@ -370,9 +390,61 @@ export default function ExpenseManagerApp() {
 
   // --- Render Helper ---
   const renderContent = () => {
+    // Modal login form
+    const loginModal = showLogin ? (
+      <div className="flex items-center justify-center h-screen fixed inset-0 bg-black bg-opacity-60 z-50">
+        <form
+          onSubmit={handleAdminLogin}
+          className="bg-gray-800 border border-gray-700 rounded-lg p-8 w-full max-w-md mx-auto relative"
+        >
+          <button
+            type="button"
+            onClick={() => setShowLogin(false)}
+            className="absolute top-2 right-2 text-gray-400 hover:text-white text-xl"
+          >
+            &times;
+          </button>
+          <h2 className="text-2xl font-bold text-cyan-400 mb-6 text-center">
+            Admin Login
+          </h2>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Email
+            </label>
+            <input
+              type="email"
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+              className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+              placeholder="admin@sharedexpenses.com"
+            />
+          </div>
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Password
+            </label>
+            <input
+              type="password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+              placeholder="Password"
+            />
+          </div>
+          <button
+            type="submit"
+            className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-6 rounded-md w-full transition-colors"
+          >
+            Login
+          </button>
+        </form>
+      </div>
+    ) : null;
+    // Main content
+    let tabContent;
     switch (activeTab) {
       case "dashboard":
-        return (
+        tabContent = (
           <Dashboard
             users={users}
             expenses={expenses}
@@ -382,35 +454,45 @@ export default function ExpenseManagerApp() {
             onDeletePayment={handleDeletePayment}
           />
         );
+        break;
       case "addExpense":
-        return (
+        tabContent = isAdmin ? (
           <AddExpenseForm
             db={db}
             users={users}
             setError={setError}
             setActiveTab={setActiveTab}
           />
+        ) : (
+          <div className="text-center text-red-400">Admin access required.</div>
         );
+        break;
       case "addPayment":
-        return (
+        tabContent = isAdmin ? (
           <AddPaymentForm
             db={db}
             users={users}
             setError={setError}
             setActiveTab={setActiveTab}
           />
+        ) : (
+          <div className="text-center text-red-400">Admin access required.</div>
         );
+        break;
       case "manageUsers":
-        return (
+        tabContent = isAdmin ? (
           <ManageUsers
             db={db}
             users={users}
             setError={setError}
             onDeleteUser={handleDeleteUser}
           />
+        ) : (
+          <div className="text-center text-red-400">Admin access required.</div>
         );
+        break;
       default:
-        return (
+        tabContent = (
           <Dashboard
             users={users}
             expenses={expenses}
@@ -421,6 +503,12 @@ export default function ExpenseManagerApp() {
           />
         );
     }
+    return (
+      <>
+        {loginModal}
+        {tabContent}
+      </>
+    );
   };
 
   if (loading)
@@ -437,8 +525,25 @@ export default function ExpenseManagerApp() {
           <h1 className="text-4xl font-bold text-cyan-400 mb-4 md:mb-0">
             Expense Manager
           </h1>
-          <div className="text-sm text-gray-400">
-            Your User ID: {userId || "N/A"}
+          <div className="text-sm text-gray-400 flex items-center">
+            <span>Your User ID: {userId || "N/A"}</span>
+            {isAdmin && <span className="ml-4 text-green-400">(Admin)</span>}
+            {isAdmin && (
+              <button
+                onClick={handleAdminLogout}
+                className="ml-4 bg-red-700 hover:bg-red-800 text-white px-3 py-1 rounded-md text-xs"
+              >
+                Logout
+              </button>
+            )}
+            {!isAdmin && (
+              <button
+                onClick={() => setShowLogin(true)}
+                className="ml-4 bg-cyan-600 hover:bg-cyan-700 text-white px-3 py-1 rounded-md text-xs"
+              >
+                Login
+              </button>
+            )}
           </div>
         </header>
 
