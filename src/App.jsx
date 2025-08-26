@@ -314,6 +314,7 @@ export default function ExpenseManagerApp() {
       setShowLogin(false);
       setError("");
     } catch (err) {
+      setShowLogin(false);
       setError("Login failed. Check your credentials.");
     }
   };
