@@ -267,6 +267,28 @@ export default function ExpenseManagerApp() {
     };
   }, [userId, db, appId]);
 
+  //--Handel settle debt
+  // --- Add this new function ---
+  const handleSettleDebt = async (debt) => {
+    if (!db) {
+      setError("Database connection is not available.");
+      return;
+    }
+    try {
+      const publicDataPath = `artifacts/${appId}/public/data`;
+      await addDoc(collection(db, `${publicDataPath}/payments`), {
+        FromUserID: debt.from,
+        ToUserID: debt.to,
+        Amount: debt.amount,
+        DateOfPayment: new Date().toISOString(),
+      });
+      setError(""); // Clear any previous errors
+    } catch (err) {
+      console.error("Error settling debt: ", err);
+      setError("Failed to record the payment.");
+    }
+  };
+
   // --- Deletion Logic ---
   const handleDeleteUser = async (userIdToDelete) => {
     // Safety check: prevent deletion if user is involved in any transaction
@@ -482,6 +504,8 @@ export default function ExpenseManagerApp() {
             balances={balances}
             onDeleteExpense={handleDeleteExpense}
             onDeletePayment={handleDeletePayment}
+            onSettleDebt={handleSettleDebt}
+            isAdmin={isAdmin}
           />
         );
         break;
@@ -533,6 +557,8 @@ export default function ExpenseManagerApp() {
             balances={balances}
             onDeleteExpense={handleDeleteExpense}
             onDeletePayment={handleDeletePayment}
+            onSettleDebt={handleSettleDebt}
+            isAdmin={isAdmin}
           />
         );
     }
@@ -674,6 +700,8 @@ const Dashboard = ({
   balances,
   onDeleteExpense,
   onDeletePayment,
+  onSettleDebt, // Added prop
+  isAdmin, // Added prop
 }) => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -699,9 +727,24 @@ const Dashboard = ({
                       {debt.toName}
                     </span>
                   </div>
-                  <span className="font-mono text-lg">
-                    ${debt.amount.toFixed(2)}
-                  </span>
+                  {/* --- MODIFIED SECTION --- */}
+                  <div className="flex items-center gap-4">
+                    <span className="font-mono text-lg">
+                      ${debt.amount.toFixed(2)}
+                    </span>
+                    {isAdmin && (
+                      <button
+                        onClick={() => onSettleDebt(debt)}
+                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs transition-colors"
+                        title={`Record that ${debt.fromName} paid ${
+                          debt.toName
+                        } $${debt.amount.toFixed(2)}`}
+                      >
+                        Paid
+                      </button>
+                    )}
+                  </div>
+                  {/* --- END OF MODIFICATION --- */}
                 </li>
               ))}
             </ul>
