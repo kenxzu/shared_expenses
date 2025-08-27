@@ -730,7 +730,7 @@ const Dashboard = ({
                   {/* --- MODIFIED SECTION --- */}
                   <div className="flex items-center gap-4">
                     <span className="font-mono text-lg">
-                      ${debt.amount.toFixed(2)}
+                      Rp{debt.amount.toFixed(2)}
                     </span>
                     {isAdmin && (
                       <button
@@ -738,7 +738,7 @@ const Dashboard = ({
                         className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs transition-colors"
                         title={`Record that ${debt.fromName} paid ${
                           debt.toName
-                        } $${debt.amount.toFixed(2)}`}
+                        } Rp${debt.amount.toFixed(2)}`}
                       >
                         Paid
                       </button>
@@ -775,7 +775,7 @@ const Dashboard = ({
                         : "text-red-300 bg-red-900/50"
                     }`}
                   >
-                    $
+                    Rp
                     {(
                       balances.balances.find((b) => b.userId === user.id)
                         ?.balance ?? 0
@@ -825,7 +825,7 @@ const Dashboard = ({
                           }
                         </td>
                         <td className="p-2 font-mono">
-                          ${expense.TotalAmount.toFixed(2)}
+                          Rp{expense.TotalAmount.toFixed(2)}
                         </td>
                         <td className="p-2 text-xs text-gray-400">
                           {expense.splits
@@ -833,7 +833,7 @@ const Dashboard = ({
                               (s) =>
                                 `${
                                   users.find((u) => u.id === s.UserID)?.UserName
-                                }: $${s.OwedAmount.toFixed(2)}`
+                                }: Rp${s.OwedAmount.toFixed(2)}`
                             )
                             .join(", ")}
                         </td>
@@ -892,7 +892,7 @@ const Dashboard = ({
                           }
                         </td>
                         <td className="p-2 font-mono">
-                          ${payment.Amount.toFixed(2)}
+                          Rp{payment.Amount.toFixed(2)}
                         </td>
                         <td className="p-2">
                           <DeleteButton
@@ -1068,7 +1068,7 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
-              Total Amount ($)
+              Total Amount (Rp)
             </label>
             <input
               type="number"
