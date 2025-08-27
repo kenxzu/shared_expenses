@@ -102,7 +102,6 @@ export default function ExpenseManagerApp() {
   const [db, setDb] = useState(null);
   const [auth, setAuth] = useState(null);
   const [userId, setUserId] = useState(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
 
   // --- Data State ---
   const [users, setUsers] = useState([]);
@@ -113,6 +112,7 @@ export default function ExpenseManagerApp() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
 
   // --- Admin Auth State ---
@@ -157,7 +157,7 @@ export default function ExpenseManagerApp() {
       setDb(firestoreDb);
       setAuth(firebaseAuth);
       setLogLevel("debug");
-      const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+      const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
         if (user) {
           setUserId(user.uid);
           if (user.email === "admin@sharedexpenses.com") {
@@ -165,11 +165,15 @@ export default function ExpenseManagerApp() {
           } else {
             setIsAdmin(false);
           }
+          // Auth is ready, but don't stop loading until data is fetched.
         } else {
-          setIsAdmin(false);
+          // No user is signed in. Attempt to sign in anonymously.
+          signInAnonymously(firebaseAuth).catch((error) => {
+            console.error("Anonymous sign-in failed:", error);
+            setError("Could not connect to the service.");
+            setLoading(false);
+          });
         }
-        setIsAuthReady(true);
-        setLoading(false);
       });
       return () => unsubscribe();
     } catch (e) {
@@ -183,21 +187,38 @@ export default function ExpenseManagerApp() {
 
   // --- Data Fetching Effect ---
   useEffect(() => {
-    if (!isAuthReady || !db) return;
+    if (!userId || !db) return;
 
-    const publicDataPath = `/artifacts/${appId}/public/data`;
+    const publicDataPath = `artifacts/${appId}/public/data`;
+
+    let userUnsubscribe, expensesUnsubscribe, paymentsUnsubscribe;
+
+    const checkDataLoaded = (() => {
+      let loaded = { users: false, expenses: false, payments: false };
+      return (type) => {
+        loaded[type] = true;
+        if (loaded.users && loaded.expenses && loaded.payments) {
+          setInitialDataLoaded(true);
+          setLoading(false);
+        }
+      };
+    })();
 
     const usersQuery = query(collection(db, `${publicDataPath}/users`));
-    const unsubscribeUsers = onSnapshot(
+    userUnsubscribe = onSnapshot(
       usersQuery,
       (snapshot) => {
         setUsers(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+        checkDataLoaded("users");
       },
-      (err) => console.error("Error fetching users:", err)
+      (err) => {
+        console.error("Error fetching users:", err);
+        setError("Failed to load user data.");
+      }
     );
 
     const expensesQuery = query(collection(db, `${publicDataPath}/expenses`));
-    const unsubscribeExpenses = onSnapshot(
+    expensesUnsubscribe = onSnapshot(
       expensesQuery,
       async (snapshot) => {
         const expensesData = await Promise.all(
@@ -216,27 +237,35 @@ export default function ExpenseManagerApp() {
           })
         );
         setExpenses(expensesData);
+        checkDataLoaded("expenses");
       },
-      (err) => console.error("Error fetching expenses:", err)
+      (err) => {
+        console.error("Error fetching expenses:", err);
+        setError("Failed to load expense data.");
+      }
     );
 
     const paymentsQuery = query(collection(db, `${publicDataPath}/payments`));
-    const unsubscribePayments = onSnapshot(
+    paymentsUnsubscribe = onSnapshot(
       paymentsQuery,
       (snapshot) => {
         setPayments(
           snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
         );
+        checkDataLoaded("payments");
       },
-      (err) => console.error("Error fetching payments:", err)
+      (err) => {
+        console.error("Error fetching payments:", err);
+        setError("Failed to load payment data.");
+      }
     );
 
     return () => {
-      unsubscribeUsers();
-      unsubscribeExpenses();
-      unsubscribePayments();
+      if (userUnsubscribe) userUnsubscribe();
+      if (expensesUnsubscribe) expensesUnsubscribe();
+      if (paymentsUnsubscribe) paymentsUnsubscribe();
     };
-  }, [isAuthReady, db, appId]);
+  }, [userId, db, appId]);
 
   // --- Deletion Logic ---
   const handleDeleteUser = async (userIdToDelete) => {
@@ -258,7 +287,7 @@ export default function ExpenseManagerApp() {
     }
 
     try {
-      const publicDataPath = `/artifacts/${appId}/public/data`;
+      const publicDataPath = `artifacts/${appId}/public/data`;
       await deleteDoc(doc(db, `${publicDataPath}/users`, userIdToDelete));
       setError("");
     } catch (err) {
@@ -269,7 +298,7 @@ export default function ExpenseManagerApp() {
 
   const handleDeleteExpense = async (expenseId) => {
     try {
-      const publicDataPath = `/artifacts/${appId}/public/data`;
+      const publicDataPath = `artifacts/${appId}/public/data`;
       // 1. Find and delete all related splits
       const splitsQuery = query(
         collection(db, `${publicDataPath}/expenseSplits`),
@@ -292,7 +321,7 @@ export default function ExpenseManagerApp() {
 
   const handleDeletePayment = async (paymentId) => {
     try {
-      const publicDataPath = `/artifacts/${appId}/public/data`;
+      const publicDataPath = `artifacts/${appId}/public/data`;
       await deleteDoc(doc(db, `${publicDataPath}/payments`, paymentId));
       setError("");
     } catch (err) {
@@ -463,6 +492,7 @@ export default function ExpenseManagerApp() {
             users={users}
             setError={setError}
             setActiveTab={setActiveTab}
+            appId={appId}
           />
         ) : (
           <div className="text-center text-red-400">Admin access required.</div>
@@ -475,6 +505,7 @@ export default function ExpenseManagerApp() {
             users={users}
             setError={setError}
             setActiveTab={setActiveTab}
+            appId={appId}
           />
         ) : (
           <div className="text-center text-red-400">Admin access required.</div>
@@ -487,6 +518,7 @@ export default function ExpenseManagerApp() {
             users={users}
             setError={setError}
             onDeleteUser={handleDeleteUser}
+            appId={appId}
           />
         ) : (
           <div className="text-center text-red-400">Admin access required.</div>
@@ -838,7 +870,7 @@ const Dashboard = ({
   );
 };
 
-const ManageUsers = ({ db, users, setError, onDeleteUser }) => {
+const ManageUsers = ({ db, users, setError, onDeleteUser, appId }) => {
   const [userName, setUserName] = useState("");
 
   const handleAddUser = async (e) => {
@@ -856,9 +888,7 @@ const ManageUsers = ({ db, users, setError, onDeleteUser }) => {
       return;
     }
     try {
-      const appId =
-        typeof __app_id !== "undefined" ? __app_id : "default-app-id";
-      const publicDataPath = `/artifacts/${appId}/public/data`;
+      const publicDataPath = `artifacts/${appId}/public/data`;
       await addDoc(collection(db, `${publicDataPath}/users`), {
         UserName: userName.trim(),
       });
@@ -915,7 +945,7 @@ const ManageUsers = ({ db, users, setError, onDeleteUser }) => {
   );
 };
 
-const AddExpenseForm = ({ db, users, setError, setActiveTab }) => {
+const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
   const [description, setDescription] = useState("");
   const [totalAmount, setTotalAmount] = useState("");
   const [payerId, setPayerId] = useState("");
@@ -947,9 +977,7 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab }) => {
     }
 
     try {
-      const appId =
-        typeof __app_id !== "undefined" ? __app_id : "default-app-id";
-      const publicDataPath = `/artifacts/${appId}/public/data`;
+      const publicDataPath = `artifacts/${appId}/public/data`;
       const expenseDocRef = await addDoc(
         collection(db, `${publicDataPath}/expenses`),
         {
@@ -1062,7 +1090,7 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab }) => {
   );
 };
 
-const AddPaymentForm = ({ db, users, setError, setActiveTab }) => {
+const AddPaymentForm = ({ db, users, setError, setActiveTab, appId }) => {
   const [fromUserId, setFromUserId] = useState("");
   const [toUserId, setToUserId] = useState("");
   const [amount, setAmount] = useState("");
@@ -1084,9 +1112,7 @@ const AddPaymentForm = ({ db, users, setError, setActiveTab }) => {
     }
 
     try {
-      const appId =
-        typeof __app_id !== "undefined" ? __app_id : "default-app-id";
-      const publicDataPath = `/artifacts/${appId}/public/data`;
+      const publicDataPath = `artifacts/${appId}/public/data`;
       await addDoc(collection(db, `${publicDataPath}/payments`), {
         FromUserID: fromUserId,
         ToUserID: toUserId,
