@@ -527,7 +527,6 @@ export default function ExpenseManagerApp() {
             Expense Manager
           </h1>
           <div className="text-sm text-gray-400 flex items-center">
-            <span>Your User ID: {userId || "N/A"}</span>
             {isAdmin && <span className="ml-4 text-green-400">(Admin)</span>}
             {isAdmin && (
               <button
