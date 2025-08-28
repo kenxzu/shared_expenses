@@ -605,7 +605,7 @@ export default function ExpenseManagerApp() {
           </div>
         </header>
 
-        <nav className="flex flex-wrap border-b border-gray-700 mb-8">
+        <nav className="flex flex-wrap border-gray-700 mb-8">
           <TabButton
             name="dashboard"
             activeTab={activeTab}
@@ -662,7 +662,7 @@ export default function ExpenseManagerApp() {
 const TabButton = ({ name, activeTab, setActiveTab, children }) => (
   <button
     onClick={() => setActiveTab(name)}
-    className={`px-4 py-3 text-sm font-medium transition-colors duration-200 focus:outline-none ${
+    className={`px-4 py-3 text-sm font-medium transition-colors duration-200 focus:outline-none ml-2 mb-9${
       activeTab === name
         ? "border-b-2 border-cyan-400 text-cyan-400"
         : "border-b-2 border-transparent text-gray-400 hover:text-white"
