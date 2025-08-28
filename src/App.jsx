@@ -7,9 +7,10 @@ import { getAnalytics } from "firebase/analytics";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
-  signInAnonymously,
   onAuthStateChanged,
-  signInWithCustomToken,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
 } from "firebase/auth";
 import {
   getFirestore,
@@ -21,6 +22,7 @@ import {
   getDocs,
   where,
   deleteDoc,
+  setDoc,
 } from "firebase/firestore";
 import { setLogLevel } from "firebase/firestore";
 
@@ -119,7 +121,7 @@ export default function ExpenseManagerApp() {
   // --- Firebase State ---
   const [db, setDb] = useState(null);
   const [auth, setAuth] = useState(null);
-  const [userId, setUserId] = useState(null);
+  const [user, setUser] = useState(null);
 
   // --- Data State ---
   const [users, setUsers] = useState([]);
@@ -130,18 +132,18 @@ export default function ExpenseManagerApp() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
-  const [showLogin, setShowLogin] = useState(false);
-  const [isMenuOpen, setIsMenuOpen] = useState(false); // State for mobile menu
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false); // <-- NEW: State to prevent login flash
 
-  // --- Admin Auth State ---
+  // --- App Auth State ---
   const [isAdmin, setIsAdmin] = useState(false);
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
+  const [adminLoginEmail, setAdminLoginEmail] = useState("");
+  const [adminLoginPassword, setAdminLoginPassword] = useState("");
   const appId = importedAppId;
 
   useEffect(() => {
-    let title = "Expense Manager"; // Default title
+    let title = "Expense Manager";
     switch (activeTab) {
       case "dashboard":
         title = "Dashboard | Expense Manager";
@@ -161,7 +163,7 @@ export default function ExpenseManagerApp() {
     document.title = title;
   }, [activeTab]);
 
-  // --- Firebase Initialization ---
+  // --- Firebase Initialization & Auth State Change ---
   useEffect(() => {
     try {
       if (!firebaseConfig.apiKey) {
@@ -170,129 +172,73 @@ export default function ExpenseManagerApp() {
         return;
       }
       const app = initializeApp(firebaseConfig);
-      const analytics = getAnalytics(app);
+      getAnalytics(app);
       const firestoreDb = getFirestore(app);
       const firebaseAuth = getAuth(app);
       setDb(firestoreDb);
       setAuth(firebaseAuth);
       setLogLevel("debug");
-      const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
-        if (user) {
-          setUserId(user.uid);
-          if (user.email === "admin@sharedexpenses.com") {
-            setIsAdmin(true);
-          } else {
-            setIsAdmin(false);
-          }
-          // Auth is ready, but don't stop loading until data is fetched.
-        } else {
-          // No user is signed in. Attempt to sign in anonymously.
-          signInAnonymously(firebaseAuth).catch((error) => {
-            console.error("Anonymous sign-in failed:", error);
-            setError("Could not connect to the service.");
-            setLoading(false);
-          });
-        }
+
+      const unsubscribe = onAuthStateChanged(firebaseAuth, (currentUser) => {
+        // --- MODIFIED: Prevent setting user during registration flow ---
+        if (isRegistering) return;
+
+        setUser(currentUser);
+        setIsAdmin(currentUser?.email === "admin@sharedexpenses.com");
+        setLoading(false);
       });
       return () => unsubscribe();
     } catch (e) {
       console.error("Firebase Init Error:", e);
-      setError(
-        "Could not initialize the application. Check console for details."
-      );
+      setError("Could not initialize the application.");
       setLoading(false);
     }
-  }, []);
+  }, [isRegistering]); // Dependency on isRegistering ensures the listener is aware of the state
 
   // --- Data Fetching Effect ---
   useEffect(() => {
-    if (!userId || !db) return;
-
+    if (!user || !db) return;
     const publicDataPath = `artifacts/${appId}/public/data`;
-
-    let userUnsubscribe, expensesUnsubscribe, paymentsUnsubscribe;
-
-    const checkDataLoaded = (() => {
-      let loaded = { users: false, expenses: false, payments: false };
-      return (type) => {
-        loaded[type] = true;
-        if (loaded.users && loaded.expenses && loaded.payments) {
-          setInitialDataLoaded(true);
-          setLoading(false);
+    const unsubscribes = [
+      onSnapshot(query(collection(db, `${publicDataPath}/users`)), (snapshot) =>
+        setUsers(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })))
+      ),
+      onSnapshot(
+        query(collection(db, `${publicDataPath}/expenses`)),
+        async (snapshot) => {
+          const expensesData = await Promise.all(
+            snapshot.docs.map(async (doc) => {
+              const expense = { id: doc.id, ...doc.data() };
+              const splitsSnapshot = await getDocs(
+                query(
+                  collection(db, `${publicDataPath}/expenseSplits`),
+                  where("ExpenseID", "==", doc.id)
+                )
+              );
+              expense.splits = splitsSnapshot.docs.map((splitDoc) => ({
+                id: splitDoc.id,
+                ...splitDoc.data(),
+              }));
+              return expense;
+            })
+          );
+          setExpenses(expensesData);
         }
-      };
-    })();
+      ),
+      onSnapshot(
+        query(collection(db, `${publicDataPath}/payments`)),
+        (snapshot) =>
+          setPayments(
+            snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+          )
+      ),
+    ];
+    return () => unsubscribes.forEach((unsub) => unsub());
+  }, [user, db, appId]);
 
-    const usersQuery = query(collection(db, `${publicDataPath}/users`));
-    userUnsubscribe = onSnapshot(
-      usersQuery,
-      (snapshot) => {
-        setUsers(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
-        checkDataLoaded("users");
-      },
-      (err) => {
-        console.error("Error fetching users:", err);
-        setError("Failed to load user data.");
-      }
-    );
-
-    const expensesQuery = query(collection(db, `${publicDataPath}/expenses`));
-    expensesUnsubscribe = onSnapshot(
-      expensesQuery,
-      async (snapshot) => {
-        const expensesData = await Promise.all(
-          snapshot.docs.map(async (doc) => {
-            const expense = { id: doc.id, ...doc.data() };
-            const splitsQuery = query(
-              collection(db, `${publicDataPath}/expenseSplits`),
-              where("ExpenseID", "==", doc.id)
-            );
-            const splitsSnapshot = await getDocs(splitsQuery);
-            expense.splits = splitsSnapshot.docs.map((splitDoc) => ({
-              id: splitDoc.id,
-              ...splitDoc.data(),
-            }));
-            return expense;
-          })
-        );
-        setExpenses(expensesData);
-        checkDataLoaded("expenses");
-      },
-      (err) => {
-        console.error("Error fetching expenses:", err);
-        setError("Failed to load expense data.");
-      }
-    );
-
-    const paymentsQuery = query(collection(db, `${publicDataPath}/payments`));
-    paymentsUnsubscribe = onSnapshot(
-      paymentsQuery,
-      (snapshot) => {
-        setPayments(
-          snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
-        );
-        checkDataLoaded("payments");
-      },
-      (err) => {
-        console.error("Error fetching payments:", err);
-        setError("Failed to load payment data.");
-      }
-    );
-
-    return () => {
-      if (userUnsubscribe) userUnsubscribe();
-      if (expensesUnsubscribe) expensesUnsubscribe();
-      if (paymentsUnsubscribe) paymentsUnsubscribe();
-    };
-  }, [userId, db, appId]);
-
-  //--Handel settle debt
-  // --- Add this new function ---
+  // --- Logic Handlers ---
   const handleSettleDebt = async (debt) => {
-    if (!db) {
-      setError("Database connection is not available.");
-      return;
-    }
+    if (!db) return;
     try {
       const publicDataPath = `artifacts/${appId}/public/data`;
       await addDoc(collection(db, `${publicDataPath}/payments`), {
@@ -301,38 +247,31 @@ export default function ExpenseManagerApp() {
         Amount: debt.amount,
         DateOfPayment: new Date().toISOString(),
       });
-      setError(""); // Clear any previous errors
     } catch (err) {
-      console.error("Error settling debt: ", err);
       setError("Failed to record the payment.");
     }
   };
 
-  // --- Deletion Logic ---
   const handleDeleteUser = async (userIdToDelete) => {
-    // Safety check: prevent deletion if user is involved in any transaction
-    const isPayer = expenses.some((e) => e.PayerID === userIdToDelete);
-    const isInSplit = expenses.some((e) =>
-      e.splits.some((s) => s.UserID === userIdToDelete)
-    );
-    const isInPayment = payments.some(
-      (p) => p.FromUserID === userIdToDelete || p.ToUserID === userIdToDelete
-    );
-
-    if (isPayer || isInSplit || isInPayment) {
-      setError(
-        "Cannot delete user. They are involved in existing financial records. Please settle all debts first."
-      );
-      setTimeout(() => setError(""), 5000); // Clear error after 5 seconds
+    if (
+      expenses.some(
+        (e) =>
+          e.PayerID === userIdToDelete ||
+          e.splits.some((s) => s.UserID === userIdToDelete)
+      ) ||
+      payments.some(
+        (p) => p.FromUserID === userIdToDelete || p.ToUserID === userIdToDelete
+      )
+    ) {
+      setError("Cannot delete user involved in transactions.");
+      setTimeout(() => setError(""), 5000);
       return;
     }
-
     try {
-      const publicDataPath = `artifacts/${appId}/public/data`;
-      await deleteDoc(doc(db, `${publicDataPath}/users`, userIdToDelete));
-      setError("");
+      await deleteDoc(
+        doc(db, `artifacts/${appId}/public/data/users`, userIdToDelete)
+      );
     } catch (err) {
-      console.error("Error deleting user:", err);
       setError("Failed to delete user.");
     }
   };
@@ -340,71 +279,61 @@ export default function ExpenseManagerApp() {
   const handleDeleteExpense = async (expenseId) => {
     try {
       const publicDataPath = `artifacts/${appId}/public/data`;
-      // 1. Find and delete all related splits
       const splitsQuery = query(
         collection(db, `${publicDataPath}/expenseSplits`),
         where("ExpenseID", "==", expenseId)
       );
       const splitsSnapshot = await getDocs(splitsQuery);
-      const deleteSplitPromises = splitsSnapshot.docs.map((docRef) =>
-        deleteDoc(docRef.ref)
+      await Promise.all(
+        splitsSnapshot.docs.map((docRef) => deleteDoc(docRef.ref))
       );
-      await Promise.all(deleteSplitPromises);
-
-      // 2. Delete the expense itself
       await deleteDoc(doc(db, `${publicDataPath}/expenses`, expenseId));
-      setError("");
     } catch (err) {
-      console.error("Error deleting expense:", err);
       setError("Failed to delete expense.");
     }
   };
 
   const handleDeletePayment = async (paymentId) => {
     try {
-      const publicDataPath = `artifacts/${appId}/public/data`;
-      await deleteDoc(doc(db, `${publicDataPath}/payments`, paymentId));
-      setError("");
+      await deleteDoc(
+        doc(db, `artifacts/${appId}/public/data/payments`, paymentId)
+      );
     } catch (err) {
-      console.error("Error deleting payment:", err);
       setError("Failed to delete payment.");
     }
   };
 
-  // --- Admin Login Handler ---
+  const handleLogout = async () => {
+    if (auth) {
+      await signOut(auth);
+    }
+  };
+
   const handleAdminLogin = async (e) => {
     e.preventDefault();
-    if (!loginEmail || !loginPassword) {
-      setError("Please enter email and password.");
+    setError("");
+    if (!adminLoginEmail || !adminLoginPassword) {
+      setError("Please enter admin email and password.");
       return;
     }
     try {
-      const { signInWithEmailAndPassword } = await import("firebase/auth");
-      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
-      setShowLogin(false);
-      setError("");
+      await signInWithEmailAndPassword(
+        auth,
+        adminLoginEmail,
+        adminLoginPassword
+      );
+      setShowAdminLogin(false);
+      setAdminLoginEmail("");
+      setAdminLoginPassword("");
     } catch (err) {
-      setShowLogin(false);
-      setError("Login failed. Check your credentials.");
+      setError("Admin login failed. Check credentials.");
     }
   };
 
-  // --- Admin Logout Handler ---
-  const handleAdminLogout = async () => {
-    const { signOut } = await import("firebase/auth");
-    await signOut(auth);
-    setIsAdmin(false);
-    setShowLogin(false);
-  };
-
-  // --- Balance Calculation ---
   const balances = useMemo(() => {
     if (users.length === 0) return { balances: [], simplifiedDebts: [] };
     const userBalances = {};
-    users.forEach((user) => {
-      userBalances[user.id] = 0;
-    });
-
+    users.forEach((user) => (userBalances[user.id] = 0));
     expenses.forEach((expense) => {
       expense.splits.forEach((split) => {
         if (split.UserID !== expense.PayerID) {
@@ -413,12 +342,10 @@ export default function ExpenseManagerApp() {
         }
       });
     });
-
     payments.forEach((payment) => {
       userBalances[payment.FromUserID] += payment.Amount;
       userBalances[payment.ToUserID] -= payment.Amount;
     });
-
     const balancesArray = Object.entries(userBalances).map(
       ([userId, balance]) => ({
         userId,
@@ -426,7 +353,6 @@ export default function ExpenseManagerApp() {
         balance: parseFloat(balance.toFixed(2)),
       })
     );
-
     const debtors = balancesArray
       .filter((b) => b.balance < 0)
       .map((b) => ({ ...b, balance: -b.balance }))
@@ -435,12 +361,10 @@ export default function ExpenseManagerApp() {
       .filter((b) => b.balance > 0)
       .sort((a, b) => a.balance - b.balance);
     const simplifiedDebts = [];
-
     while (debtors.length > 0 && creditors.length > 0) {
       const debtor = debtors[0];
       const creditor = creditors[0];
       const amount = Math.min(debtor.balance, creditor.balance);
-
       if (amount > 0.001) {
         simplifiedDebts.push({
           from: debtor.userId,
@@ -455,67 +379,39 @@ export default function ExpenseManagerApp() {
       if (debtor.balance < 0.001) debtors.shift();
       if (creditor.balance < 0.001) creditors.shift();
     }
-
     return { balances: balancesArray, simplifiedDebts };
   }, [users, expenses, payments]);
 
-  // --- Render Helper ---
-  const renderContent = () => {
-    // Modal login form
-    const loginModal = showLogin ? (
-      <div className="flex items-center justify-center h-screen fixed inset-0 bg-black bg-opacity-60 z-50">
-        <form
-          onSubmit={handleAdminLogin}
-          className="bg-gray-800 border border-gray-700 rounded-lg p-8 w-full max-w-md mx-auto relative"
-        >
-          <button
-            type="button"
-            onClick={() => setShowLogin(false)}
-            className="absolute top-2 right-2 text-gray-400 hover:text-white text-xl"
-          >
-            &times;
-          </button>
-          <h2 className="text-2xl font-bold text-cyan-400 mb-6 text-center">
-            Admin Login
-          </h2>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Email
-            </label>
-            <input
-              type="email"
-              value={loginEmail}
-              onChange={(e) => setLoginEmail(e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-              placeholder="admin@sharedexpenses.com"
-            />
-          </div>
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Password
-            </label>
-            <input
-              type="password"
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-              placeholder="Password"
-            />
-          </div>
-          <button
-            type="submit"
-            className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-6 rounded-md w-full transition-colors"
-          >
-            Login
-          </button>
-        </form>
+  // --- Render Logic ---
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-900 text-white">
+        <div className="text-xl">Initializing...</div>
       </div>
-    ) : null;
-    // Main content
-    let tabContent;
+    );
+  }
+
+  if (!user) {
+    return (
+      <AuthPage
+        auth={auth}
+        db={db}
+        parentSetError={setError}
+        appId={appId}
+        setIsRegistering={setIsRegistering}
+      />
+    );
+  }
+
+  const handleMobileNavClick = (tabName) => {
+    setActiveTab(tabName);
+    setIsMenuOpen(false);
+  };
+
+  const renderContent = () => {
     switch (activeTab) {
       case "dashboard":
-        tabContent = (
+        return (
           <Dashboard
             users={users}
             expenses={expenses}
@@ -525,11 +421,11 @@ export default function ExpenseManagerApp() {
             onDeletePayment={handleDeletePayment}
             onSettleDebt={handleSettleDebt}
             isAdmin={isAdmin}
+            loggedInUserId={user.uid}
           />
         );
-        break;
       case "addExpense":
-        tabContent = isAdmin ? (
+        return isAdmin ? (
           <AddExpenseForm
             db={db}
             users={users}
@@ -540,9 +436,8 @@ export default function ExpenseManagerApp() {
         ) : (
           <div className="text-center text-red-400">Admin access required.</div>
         );
-        break;
       case "addPayment":
-        tabContent = isAdmin ? (
+        return isAdmin ? (
           <AddPaymentForm
             db={db}
             users={users}
@@ -553,22 +448,14 @@ export default function ExpenseManagerApp() {
         ) : (
           <div className="text-center text-red-400">Admin access required.</div>
         );
-        break;
       case "manageUsers":
-        tabContent = isAdmin ? (
-          <ManageUsers
-            db={db}
-            users={users}
-            setError={setError}
-            onDeleteUser={handleDeleteUser}
-            appId={appId}
-          />
+        return isAdmin ? (
+          <ManageUsers users={users} onDeleteUser={handleDeleteUser} />
         ) : (
           <div className="text-center text-red-400">Admin access required.</div>
         );
-        break;
       default:
-        tabContent = (
+        return (
           <Dashboard
             users={users}
             expenses={expenses}
@@ -578,60 +465,90 @@ export default function ExpenseManagerApp() {
             onDeletePayment={handleDeletePayment}
             onSettleDebt={handleSettleDebt}
             isAdmin={isAdmin}
+            loggedInUserId={user.uid}
           />
         );
     }
-    return (
-      <>
-        {loginModal}
-        {tabContent}
-      </>
-    );
   };
 
-  if (loading)
-    return (
-      <div className="flex items-center justify-center h-screen bg-gray-900 text-white">
-        <div className="text-xl">Initializing Expense Manager...</div>
-      </div>
-    );
-
-  const handleMobileNavClick = (tabName) => {
-    setActiveTab(tabName);
-    setIsMenuOpen(false);
-  };
-
+  // --- Main App JSX ---
   return (
     <div className="bg-gray-900 text-gray-100 min-h-screen font-sans flex flex-col">
+      {showAdminLogin && (
+        <div className="flex items-center justify-center h-screen fixed inset-0 bg-black bg-opacity-60 z-50">
+          <form
+            onSubmit={handleAdminLogin}
+            className="bg-gray-800 border border-gray-700 rounded-lg p-8 w-full max-w-md mx-auto relative"
+          >
+            <button
+              type="button"
+              onClick={() => setShowAdminLogin(false)}
+              className="absolute top-2 right-2 text-gray-400 hover:text-white text-xl"
+            >
+              &times;
+            </button>
+            <h2 className="text-2xl font-bold text-cyan-400 mb-6 text-center">
+              Admin Login
+            </h2>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-300 mb-1">
+                Email
+              </label>
+              <input
+                type="email"
+                value={adminLoginEmail}
+                onChange={(e) => setAdminLoginEmail(e.target.value)}
+                className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2"
+              />
+            </div>
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-300 mb-1">
+                Password
+              </label>
+              <input
+                type="password"
+                value={adminLoginPassword}
+                onChange={(e) => setAdminLoginPassword(e.target.value)}
+                className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2"
+                placeholder="Password"
+              />
+            </div>
+            <button
+              type="submit"
+              className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-6 rounded-md w-full"
+            >
+              Login
+            </button>
+          </form>
+        </div>
+      )}
+
       <div className="w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 flex-grow flex flex-col">
-        <header className="flex flex-col md:flex-row justify-between items-center mb-4 md:mb-8">
-          <h1 className="text-4xl font-bold text-cyan-400 mb-4 md:mb-0">
-            Expense Manager
-          </h1>
-          <div className="text-sm text-gray-400 flex items-center">
-            {isAdmin && <span className="ml-4 text-green-400">(Admin)</span>}
-            {isAdmin && (
-              <button
-                onClick={handleAdminLogout}
-                className="ml-4 bg-red-700 hover:bg-red-800 text-white px-3 py-1 rounded-md text-xs"
-              >
-                Logout
-              </button>
-            )}
+        <header className="flex flex-col md:flex-row justify-between items-center mb-4 md:mb-8 gap-4">
+          <h1 className="text-4xl font-bold text-cyan-400">Expense Manager</h1>
+          <div className="flex items-center gap-4 text-sm flex-wrap justify-center">
+            <span className="text-gray-300">
+              {user.email}{" "}
+              {isAdmin && <span className="text-green-400">(Admin)</span>}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="bg-gray-600 hover:bg-gray-700 text-white px-3 py-1 rounded-md text-xs"
+            >
+              Logout
+            </button>
             {!isAdmin && (
               <button
-                onClick={() => setShowLogin(true)}
-                className="ml-4 bg-cyan-600 hover:bg-cyan-700 text-white px-3 py-1 rounded-md text-xs"
+                onClick={() => setShowAdminLogin(true)}
+                className="bg-cyan-600 hover:bg-cyan-700 text-white px-3 py-1 rounded-md text-xs"
               >
-                Login
+                Admin Login
               </button>
             )}
           </div>
         </header>
 
-        {/* --- MODIFIED NAVIGATION --- */}
         <nav className="relative mb-8">
-          {/* Desktop Navigation */}
           <div className="hidden md:flex flex-wrap border-b border-gray-700">
             <TabButton
               name="dashboard"
@@ -640,53 +557,49 @@ export default function ExpenseManagerApp() {
             >
               Dashboard
             </TabButton>
-            <TabButton
-              name="addExpense"
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-            >
-              Add Expense
-            </TabButton>
-            <TabButton
-              name="addPayment"
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-            >
-              Add Payment
-            </TabButton>
-            <TabButton
-              name="manageUsers"
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-            >
-              Manage Users
-            </TabButton>
+            {isAdmin && (
+              <>
+                <TabButton
+                  name="addExpense"
+                  activeTab={activeTab}
+                  setActiveTab={setActiveTab}
+                >
+                  Add Expense
+                </TabButton>
+                <TabButton
+                  name="addPayment"
+                  activeTab={activeTab}
+                  setActiveTab={setActiveTab}
+                >
+                  Add Payment
+                </TabButton>
+                <TabButton
+                  name="manageUsers"
+                  activeTab={activeTab}
+                  setActiveTab={setActiveTab}
+                >
+                  Manage Users
+                </TabButton>
+              </>
+            )}
           </div>
-
-          {/* Mobile Navigation Button */}
           <div className="md:hidden flex justify-between items-center border-b border-gray-700 p-2">
             <span className="text-lg font-semibold text-white ml-2 capitalize">
               {activeTab.replace(/([A-Z])/g, " $1").trim()}
             </span>
-            <button
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="text-gray-300 hover:text-white focus:outline-none p-2"
-              aria-label="Open navigation menu"
-            >
+            <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2">
               <MenuIcon />
             </button>
           </div>
-
-          {/* Mobile Menu Dropdown */}
           {isMenuOpen && (
-            <div className="md:hidden absolute top-full right-0 mt-1 w-full bg-gray-800 border border-gray-700 rounded-md shadow-lg z-20">
+            <div className="md:hidden absolute top-full right-0 mt-1 w-full bg-gray-800 border-gray-700 rounded-md shadow-lg z-20">
               <a
                 href="#dashboard"
                 onClick={(e) => {
                   e.preventDefault();
                   handleMobileNavClick("dashboard");
                 }}
-                className={`block px-4 py-3 text-sm transition-colors ${
+                className={`block px-4 py-3 text-sm ${
                   activeTab === "dashboard"
                     ? "text-cyan-400 bg-gray-700"
                     : "text-gray-300 hover:bg-gray-700"
@@ -694,63 +607,63 @@ export default function ExpenseManagerApp() {
               >
                 Dashboard
               </a>
-              <a
-                href="#addExpense"
-                onClick={(e) => {
-                  e.preventDefault();
-                  handleMobileNavClick("addExpense");
-                }}
-                className={`block px-4 py-3 text-sm transition-colors ${
-                  activeTab === "addExpense"
-                    ? "text-cyan-400 bg-gray-700"
-                    : "text-gray-300 hover:bg-gray-700"
-                }`}
-              >
-                Add Expense
-              </a>
-              <a
-                href="#addPayment"
-                onClick={(e) => {
-                  e.preventDefault();
-                  handleMobileNavClick("addPayment");
-                }}
-                className={`block px-4 py-3 text-sm transition-colors ${
-                  activeTab === "addPayment"
-                    ? "text-cyan-400 bg-gray-700"
-                    : "text-gray-300 hover:bg-gray-700"
-                }`}
-              >
-                Add Payment
-              </a>
-              <a
-                href="#manageUsers"
-                onClick={(e) => {
-                  e.preventDefault();
-                  handleMobileNavClick("manageUsers");
-                }}
-                className={`block px-4 py-3 text-sm transition-colors ${
-                  activeTab === "manageUsers"
-                    ? "text-cyan-400 bg-gray-700"
-                    : "text-gray-300 hover:bg-gray-700"
-                }`}
-              >
-                Manage Users
-              </a>
+              {isAdmin && (
+                <>
+                  <a
+                    href="#addExpense"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleMobileNavClick("addExpense");
+                    }}
+                    className={`block px-4 py-3 text-sm ${
+                      activeTab === "addExpense"
+                        ? "text-cyan-400 bg-gray-700"
+                        : "text-gray-300 hover:bg-gray-700"
+                    }`}
+                  >
+                    Add Expense
+                  </a>
+                  <a
+                    href="#addPayment"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleMobileNavClick("addPayment");
+                    }}
+                    className={`block px-4 py-3 text-sm ${
+                      activeTab === "addPayment"
+                        ? "text-cyan-400 bg-gray-700"
+                        : "text-gray-300 hover:bg-gray-700"
+                    }`}
+                  >
+                    Add Payment
+                  </a>
+                  <a
+                    href="#manageUsers"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleMobileNavClick("manageUsers");
+                    }}
+                    className={`block px-4 py-3 text-sm ${
+                      activeTab === "manageUsers"
+                        ? "text-cyan-400 bg-gray-700"
+                        : "text-gray-300 hover:bg-gray-700"
+                    }`}
+                  >
+                    Manage Users
+                  </a>
+                </>
+              )}
             </div>
           )}
         </nav>
-        {/* --- END OF NAVIGATION --- */}
 
         <main className="flex-grow">
           {error && (
-            <div
-              className="bg-red-800/50 border border-red-600 text-red-200 p-3 rounded-md mb-6 text-center relative text-sm"
-              role="alert"
-            >
+            <div className="bg-red-800/50 border-red-600 text-red-200 p-3 rounded-md mb-6 text-center relative text-sm">
               <span>{error}</span>
               <button
                 onClick={() => setError("")}
-                className="absolute top-1/2 right-3 -translate-y-1/2 font-bold text-lg leading-none"
+                className="absolute top-1/2 right-3 -translate-y-1/2 font-bold text-lg"
               >
                 &times;
               </button>
@@ -763,11 +676,176 @@ export default function ExpenseManagerApp() {
   );
 }
 
-// --- UI Components ---
+// --- Authentication Page Component ---
+const AuthPage = ({ auth, db, parentSetError, appId, setIsRegistering }) => {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [userName, setUserName] = useState("");
+  const [error, setError] = useState("");
+  const [registrationSuccess, setRegistrationSuccess] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    parentSetError("");
+
+    if (!isLogin && password.length < 6) {
+      setError("Your password must be at least 6 characters long.");
+      return;
+    }
+
+    // Set registering state in parent to prevent login flash
+    if (!isLogin) setIsRegistering(true);
+
+    try {
+      if (isLogin) {
+        await signInWithEmailAndPassword(auth, email, password);
+      } else {
+        if (!userName.trim()) {
+          setError("Please enter a user name.");
+          return;
+        }
+        const userCredential = await createUserWithEmailAndPassword(
+          auth,
+          email,
+          password
+        );
+        const publicDataPath = `artifacts/${appId}/public/data`;
+        await setDoc(
+          doc(db, `${publicDataPath}/users`, userCredential.user.uid),
+          {
+            UserName: userName.trim(),
+          }
+        );
+
+        await signOut(auth);
+        setRegistrationSuccess(true);
+        setEmail("");
+        setPassword("");
+        setUserName("");
+      }
+    } catch (err) {
+      switch (err.code) {
+        case "auth/weak-password":
+          setError("Your password must be at least 6 characters long.");
+          break;
+        case "auth/wrong-password":
+        case "auth/user-not-found":
+          setError("Incorrect email or password. Please try again.");
+          break;
+        case "auth/email-already-in-use":
+          setError("An account with this email address already exists.");
+          break;
+        default:
+          setError("An error occurred. Please try again.");
+          console.error("Firebase auth error:", err);
+          break;
+      }
+    } finally {
+      // Always reset registering state
+      if (!isLogin) setIsRegistering(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-gray-900">
+      {registrationSuccess && (
+        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black bg-opacity-75">
+          <div className="w-full max-w-sm p-8 space-y-6 text-center bg-gray-800 border border-gray-700 rounded-lg">
+            <h2 className="text-2xl font-bold text-green-400">
+              Successfully Registered!
+            </h2>
+            <p className="text-gray-300">
+              You can now log in with your new account.
+            </p>
+            <button
+              onClick={() => {
+                setRegistrationSuccess(false);
+                setIsLogin(true);
+              }}
+              className="w-full py-2 font-bold text-white bg-cyan-600 rounded-md hover:bg-cyan-700"
+            >
+              Login Now
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="w-full max-w-md p-8 space-y-6 bg-gray-800 border border-gray-700 rounded-lg">
+        <h2 className="text-2xl font-bold text-center text-cyan-400">
+          {isLogin ? "Login" : "Register"}
+        </h2>
+        {error && (
+          <div className="p-3 text-center text-sm text-red-200 bg-red-800/50 border border-red-600 rounded-md">
+            {error}
+          </div>
+        )}
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {!isLogin && (
+            <div>
+              <label className="block text-sm font-medium text-gray-300">
+                User Name
+              </label>
+              <input
+                type="text"
+                value={userName}
+                onChange={(e) => setUserName(e.target.value)}
+                required
+                className="w-full px-4 py-2 mt-1 bg-gray-700 border border-gray-600 rounded-md"
+              />
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-300">
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="w-full px-4 py-2 mt-1 bg-gray-700 border border-gray-600 rounded-md"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300">
+              Password
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              className="w-full px-4 py-2 mt-1 bg-gray-700 border border-gray-600 rounded-md"
+            />
+          </div>
+          <button
+            type="submit"
+            className="w-full py-2 font-bold text-white bg-cyan-600 rounded-md hover:bg-cyan-700"
+          >
+            {isLogin ? "Login" : "Register"}
+          </button>
+        </form>
+        <button
+          onClick={() => {
+            setIsLogin(!isLogin);
+            setError("");
+          }}
+          className="w-full text-sm text-center text-cyan-400 hover:underline"
+        >
+          {isLogin ? "Need an account? Register" : "Have an account? Login"}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// --- Other UI Components ---
 const TabButton = ({ name, activeTab, setActiveTab, children }) => (
   <button
     onClick={() => setActiveTab(name)}
-    className={`px-4 py-3 text-sm font-medium transition-colors duration-200 focus:outline-none -mb-px ${
+    className={`px-4 py-3 text-sm font-medium -mb-px ${
       activeTab === name
         ? "border-b-2 border-cyan-400 text-cyan-400"
         : "border-b-2 border-transparent text-gray-400 hover:text-white"
@@ -791,7 +869,7 @@ const CardTitle = ({ children }) => (
 const DeleteButton = ({ onClick }) => (
   <button
     onClick={onClick}
-    className="text-gray-500 hover:text-red-400 transition-colors p-1 rounded-full hover:bg-red-900/50"
+    className="text-gray-500 hover:text-red-400 p-1 rounded-full hover:bg-red-900/50"
   >
     <TrashIcon />
   </button>
@@ -803,10 +881,9 @@ const Dashboard = ({
   expenses,
   payments,
   balances,
-  onDeleteExpense,
-  onDeletePayment,
-  onSettleDebt, // Added prop
-  isAdmin, // Added prop
+  onSettleDebt,
+  isAdmin,
+  loggedInUserId,
 }) => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -836,15 +913,12 @@ const Dashboard = ({
                     <span className="font-mono text-lg">
                       Rp{debt.amount.toFixed(2)}
                     </span>
-                    {isAdmin && (
+                    {loggedInUserId === debt.to && (
                       <button
                         onClick={() => onSettleDebt(debt)}
-                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs transition-colors"
-                        title={`Record that ${debt.fromName} paid ${
-                          debt.toName
-                        } Rp${debt.amount.toFixed(2)}`}
+                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs"
                       >
-                        Paid
+                        Settle
                       </button>
                     )}
                   </div>
@@ -905,7 +979,7 @@ const Dashboard = ({
                     <th className="p-2">Payer</th>
                     <th className="p-2">Amount</th>
                     <th className="p-2">Split Details</th>
-                    <th className="p-2">Actions</th>
+                    {isAdmin && <th className="p-2">Actions</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
@@ -940,13 +1014,13 @@ const Dashboard = ({
                             )
                             .join(", ")}
                         </td>
-                        <td className="p-2">
-                          {isAdmin && (
+                        {isAdmin && (
+                          <td className="p-2">
                             <DeleteButton
-                              onClick={() => onDeleteExpense(expense.id)}
+                              onClick={() => handleDeleteExpense(expense.id)}
                             />
-                          )}
-                        </td>
+                          </td>
+                        )}
                       </tr>
                     ))}
                 </tbody>
@@ -969,7 +1043,7 @@ const Dashboard = ({
                     <th className="p-2">From</th>
                     <th className="p-2">To</th>
                     <th className="p-2">Amount</th>
-                    <th className="p-2">Actions</th>
+                    {isAdmin && <th className="p-2">Actions</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
@@ -999,13 +1073,13 @@ const Dashboard = ({
                         <td className="p-2 font-mono whitespace-nowrap">
                           Rp{payment.Amount.toFixed(2)}
                         </td>
-                        <td className="p-2">
-                          {isAdmin && (
+                        {isAdmin && (
+                          <td className="p-2">
                             <DeleteButton
-                              onClick={() => onDeletePayment(payment.id)}
+                              onClick={() => handleDeletePayment(payment.id)}
                             />
-                          )}
-                        </td>
+                          </td>
+                        )}
                       </tr>
                     ))}
                 </tbody>
@@ -1020,57 +1094,16 @@ const Dashboard = ({
   );
 };
 
-const ManageUsers = ({ db, users, setError, onDeleteUser, appId }) => {
-  const [userName, setUserName] = useState("");
-
-  const handleAddUser = async (e) => {
-    e.preventDefault();
-    if (!userName.trim()) {
-      setError("User name cannot be empty.");
-      return;
-    }
-    if (
-      users.some(
-        (u) => u.UserName.toLowerCase() === userName.trim().toLowerCase()
-      )
-    ) {
-      setError("A user with this name already exists.");
-      return;
-    }
-    try {
-      const publicDataPath = `artifacts/${appId}/public/data`;
-      await addDoc(collection(db, `${publicDataPath}/users`), {
-        UserName: userName.trim(),
-      });
-      setUserName("");
-      setError("");
-    } catch (err) {
-      console.error("Error adding user: ", err);
-      setError("Failed to add user.");
-    }
-  };
-
+const ManageUsers = ({ users, onDeleteUser }) => {
   return (
     <Card>
       <CardTitle>Manage Users</CardTitle>
-      <form
-        onSubmit={handleAddUser}
-        className="flex flex-col sm:flex-row gap-4 mb-6"
-      >
-        <input
-          type="text"
-          value={userName}
-          onChange={(e) => setUserName(e.target.value)}
-          placeholder="Enter new user's name"
-          className="flex-grow bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-        />
-        <button
-          type="submit"
-          className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-md transition-colors"
-        >
-          Add User
-        </button>
-      </form>
+      <div className="mb-6 bg-gray-700/50 p-3 rounded-md border border-gray-600">
+        <p className="text-sm text-gray-300">
+          Group members are now added automatically when they register for a new
+          account. You can use this panel to view and remove existing members.
+        </p>
+      </div>
       <div>
         <h3 className="text-lg font-semibold mb-2">Existing Users:</h3>
         {users.length > 0 ? (
@@ -1080,15 +1113,18 @@ const ManageUsers = ({ db, users, setError, onDeleteUser, appId }) => {
                 key={user.id}
                 className="flex items-center justify-between bg-gray-700 p-3 rounded-md"
               >
-                <span>{user.UserName}</span>
+                <div>
+                  <span className="font-bold">{user.UserName}</span>
+                  <span className="block text-xs text-gray-400 mt-1 font-mono">
+                    ID: {user.id}
+                  </span>
+                </div>
                 <DeleteButton onClick={() => onDeleteUser(user.id)} />
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-gray-400">
-            No users yet. Add one above to get started!
-          </p>
+          <p className="text-gray-400">No users have registered yet.</p>
         )}
       </div>
     </Card>
@@ -1100,32 +1136,21 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
   const [totalAmount, setTotalAmount] = useState("");
   const [payerId, setPayerId] = useState("");
   const [splitWith, setSplitWith] = useState([]);
-
   useEffect(() => {
-    if (users.length > 0) {
-      setSplitWith(users.map((u) => u.id));
-    }
+    if (users.length > 0) setSplitWith(users.map((u) => u.id));
   }, [users]);
-  const handleSplitToggle = (userId) => {
+  const handleSplitToggle = (userId) =>
     setSplitWith((prev) =>
       prev.includes(userId)
         ? prev.filter((id) => id !== userId)
         : [...prev, userId]
     );
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     const amount = parseFloat(totalAmount);
-    if (!description || !amount || !payerId || splitWith.length === 0) {
-      setError("Please fill all fields and select users to split with.");
-      return;
-    }
-    if (amount <= 0) {
-      setError("Amount must be positive.");
-      return;
-    }
-
+    if (!description || !amount || !payerId || splitWith.length === 0)
+      return setError("Please fill all fields.");
+    if (amount <= 0) return setError("Amount must be positive.");
     try {
       const publicDataPath = `artifacts/${appId}/public/data`;
       const expenseDocRef = await addDoc(
@@ -1138,62 +1163,51 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
         }
       );
       const owedAmount = amount / splitWith.length;
-      const splitPromises = splitWith.map((userId) =>
-        addDoc(collection(db, `${publicDataPath}/expenseSplits`), {
-          ExpenseID: expenseDocRef.id,
-          UserID: userId,
-          OwedAmount: owedAmount,
-        })
+      await Promise.all(
+        splitWith.map((userId) =>
+          addDoc(collection(db, `${publicDataPath}/expenseSplits`), {
+            ExpenseID: expenseDocRef.id,
+            UserID: userId,
+            OwedAmount: owedAmount,
+          })
+        )
       );
-      await Promise.all(splitPromises);
-      setDescription("");
-      setTotalAmount("");
-      setPayerId("");
       setActiveTab("dashboard");
-      setError("");
     } catch (err) {
-      console.error("Error adding expense: ", err);
       setError("Failed to add expense.");
     }
   };
-
   return (
     <Card>
       <CardTitle>Add a New Expense</CardTitle>
       <form onSubmit={handleSubmit} className="space-y-6">
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">
-            Description
-          </label>
+          <label className="block text-sm mb-1">Description</label>
           <input
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+            className="w-full bg-gray-700 border-gray-600 rounded-md px-4 py-2"
           />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid md:grid-cols-2 gap-6">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Total Amount (Rp)
-            </label>
+            <label className="block text-sm mb-1">Total Amount (Rp)</label>
             <input
               type="number"
               value={totalAmount}
               onChange={(e) => setTotalAmount(e.target.value)}
               min="0.01"
               step="0.01"
-              className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+              className="w-full bg-gray-700 border-gray-600 rounded-md px-4 py-2"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Paid By
-            </label>
+            <label className="block text-sm mb-1">Paid By</label>
             <select
               value={payerId}
               onChange={(e) => setPayerId(e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+              className="w-full bg-gray-700 border-gray-600 rounded-md px-4 py-2"
             >
               <option value="" disabled>
                 Select a user
@@ -1207,18 +1221,16 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
           </div>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            Split Equally With
-          </label>
+          <label className="block text-sm mb-2">Split Equally With</label>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
             {users.map((user) => (
               <button
                 type="button"
                 key={user.id}
                 onClick={() => handleSplitToggle(user.id)}
-                className={`p-3 rounded-md text-sm text-center transition-colors ${
+                className={`p-3 rounded-md text-sm ${
                   splitWith.includes(user.id)
-                    ? "bg-cyan-600 text-white ring-2 ring-cyan-400"
+                    ? "bg-cyan-600 text-white"
                     : "bg-gray-700 hover:bg-gray-600"
                 }`}
               >
@@ -1230,7 +1242,7 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
         <div className="text-right">
           <button
             type="submit"
-            className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-6 rounded-md transition-colors"
+            className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-6 rounded-md"
           >
             Add Expense
           </button>
@@ -1244,42 +1256,26 @@ const AddPaymentForm = ({ db, users, setError, setActiveTab, appId }) => {
   const [fromUserId, setFromUserId] = useState("");
   const [toUserId, setToUserId] = useState("");
   const [amount, setAmount] = useState("");
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     const paymentAmount = parseFloat(amount);
-    if (!fromUserId || !toUserId || !paymentAmount) {
-      setError("Please fill all fields.");
-      return;
-    }
-    if (fromUserId === toUserId) {
-      setError("Cannot make a payment to the same user.");
-      return;
-    }
-    if (paymentAmount <= 0) {
-      setError("Amount must be positive.");
-      return;
-    }
-
+    if (!fromUserId || !toUserId || !paymentAmount)
+      return setError("Please fill all fields.");
+    if (fromUserId === toUserId)
+      return setError("Cannot make a payment to the same user.");
+    if (paymentAmount <= 0) return setError("Amount must be positive.");
     try {
-      const publicDataPath = `artifacts/${appId}/public/data`;
-      await addDoc(collection(db, `${publicDataPath}/payments`), {
+      await addDoc(collection(db, `artifacts/${appId}/public/data/payments`), {
         FromUserID: fromUserId,
         ToUserID: toUserId,
         Amount: paymentAmount,
         DateOfPayment: new Date().toISOString(),
       });
-      setFromUserId("");
-      setToUserId("");
-      setAmount("");
       setActiveTab("dashboard");
-      setError("");
     } catch (err) {
-      console.error("Error adding payment: ", err);
       setError("Failed to record payment.");
     }
   };
-
   return (
     <Card>
       <CardTitle>Record a Payment</CardTitle>
@@ -1287,15 +1283,13 @@ const AddPaymentForm = ({ db, users, setError, setActiveTab, appId }) => {
         Use this to settle debts between users.
       </p>
       <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
+        <div className="grid md:grid-cols-2 gap-6">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              From (who paid)
-            </label>
+            <label className="block text-sm mb-1">From (who paid)</label>
             <select
               value={fromUserId}
               onChange={(e) => setFromUserId(e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+              className="w-full bg-gray-700 border-gray-600 rounded-md px-4 py-2"
             >
               <option value="" disabled>
                 Select a user
@@ -1308,13 +1302,11 @@ const AddPaymentForm = ({ db, users, setError, setActiveTab, appId }) => {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              To (who received)
-            </label>
+            <label className="block text-sm mb-1">To (who received)</label>
             <select
               value={toUserId}
               onChange={(e) => setToUserId(e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+              className="w-full bg-gray-700 border-gray-600 rounded-md px-4 py-2"
             >
               <option value="" disabled>
                 Select a user
@@ -1328,22 +1320,20 @@ const AddPaymentForm = ({ db, users, setError, setActiveTab, appId }) => {
           </div>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">
-            Amount ($)
-          </label>
+          <label className="block text-sm mb-1">Amount (Rp)</label>
           <input
             type="number"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             min="0.01"
             step="0.01"
-            className="w-full bg-gray-700 border border-gray-600 rounded-md px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+            className="w-full bg-gray-700 border-gray-600 rounded-md px-4 py-2"
           />
         </div>
         <div className="text-right">
           <button
             type="submit"
-            className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-6 rounded-md transition-colors"
+            className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-6 rounded-md"
           >
             Record Payment
           </button>
