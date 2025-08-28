@@ -95,6 +95,24 @@ const TrashIcon = () => (
     <line x1="14" y1="11" x2="14" y2="17"></line>
   </svg>
 );
+const MenuIcon = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className="h-6 w-6"
+  >
+    <line x1="3" y1="12" x2="21" y2="12"></line>
+    <line x1="3" y1="6" x2="21" y2="6"></line>
+    <line x1="3" y1="18" x2="21" y2="18"></line>
+  </svg>
+);
 
 // --- Main App Component ---
 export default function ExpenseManagerApp() {
@@ -114,6 +132,7 @@ export default function ExpenseManagerApp() {
   const [loading, setLoading] = useState(true);
   const [initialDataLoaded, setInitialDataLoaded] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false); // State for mobile menu
 
   // --- Admin Auth State ---
   const [isAdmin, setIsAdmin] = useState(false);
@@ -577,10 +596,15 @@ export default function ExpenseManagerApp() {
       </div>
     );
 
+  const handleMobileNavClick = (tabName) => {
+    setActiveTab(tabName);
+    setIsMenuOpen(false);
+  };
+
   return (
-    <div className="bg-gray-900 text-gray-100 min-h-screen font-sans">
-      <div className="container mx-auto p-4 md:p-8">
-        <header className="flex flex-col md:flex-row justify-between items-center mb-8">
+    <div className="bg-gray-900 text-gray-100 min-h-screen font-sans flex flex-col">
+      <div className="w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 flex-grow flex flex-col">
+        <header className="flex flex-col md:flex-row justify-between items-center mb-4 md:mb-8">
           <h1 className="text-4xl font-bold text-cyan-400 mb-4 md:mb-0">
             Expense Manager
           </h1>
@@ -605,38 +629,119 @@ export default function ExpenseManagerApp() {
           </div>
         </header>
 
-        <nav className="flex flex-wrap border-gray-700 mb-8">
-          <TabButton
-            name="dashboard"
-            activeTab={activeTab}
-            setActiveTab={setActiveTab}
-          >
-            Dashboard
-          </TabButton>
-          <TabButton
-            name="addExpense"
-            activeTab={activeTab}
-            setActiveTab={setActiveTab}
-          >
-            Add Expense
-          </TabButton>
-          <TabButton
-            name="addPayment"
-            activeTab={activeTab}
-            setActiveTab={setActiveTab}
-          >
-            Add Payment
-          </TabButton>
-          <TabButton
-            name="manageUsers"
-            activeTab={activeTab}
-            setActiveTab={setActiveTab}
-          >
-            Manage Users
-          </TabButton>
-        </nav>
+        {/* --- MODIFIED NAVIGATION --- */}
+        <nav className="relative mb-8">
+          {/* Desktop Navigation */}
+          <div className="hidden md:flex flex-wrap border-b border-gray-700">
+            <TabButton
+              name="dashboard"
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+            >
+              Dashboard
+            </TabButton>
+            <TabButton
+              name="addExpense"
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+            >
+              Add Expense
+            </TabButton>
+            <TabButton
+              name="addPayment"
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+            >
+              Add Payment
+            </TabButton>
+            <TabButton
+              name="manageUsers"
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+            >
+              Manage Users
+            </TabButton>
+          </div>
 
-        <main>
+          {/* Mobile Navigation Button */}
+          <div className="md:hidden flex justify-between items-center border-b border-gray-700 p-2">
+            <span className="text-lg font-semibold text-white ml-2 capitalize">
+              {activeTab.replace(/([A-Z])/g, " $1").trim()}
+            </span>
+            <button
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+              className="text-gray-300 hover:text-white focus:outline-none p-2"
+              aria-label="Open navigation menu"
+            >
+              <MenuIcon />
+            </button>
+          </div>
+
+          {/* Mobile Menu Dropdown */}
+          {isMenuOpen && (
+            <div className="md:hidden absolute top-full right-0 mt-1 w-full bg-gray-800 border border-gray-700 rounded-md shadow-lg z-20">
+              <a
+                href="#dashboard"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleMobileNavClick("dashboard");
+                }}
+                className={`block px-4 py-3 text-sm transition-colors ${
+                  activeTab === "dashboard"
+                    ? "text-cyan-400 bg-gray-700"
+                    : "text-gray-300 hover:bg-gray-700"
+                }`}
+              >
+                Dashboard
+              </a>
+              <a
+                href="#addExpense"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleMobileNavClick("addExpense");
+                }}
+                className={`block px-4 py-3 text-sm transition-colors ${
+                  activeTab === "addExpense"
+                    ? "text-cyan-400 bg-gray-700"
+                    : "text-gray-300 hover:bg-gray-700"
+                }`}
+              >
+                Add Expense
+              </a>
+              <a
+                href="#addPayment"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleMobileNavClick("addPayment");
+                }}
+                className={`block px-4 py-3 text-sm transition-colors ${
+                  activeTab === "addPayment"
+                    ? "text-cyan-400 bg-gray-700"
+                    : "text-gray-300 hover:bg-gray-700"
+                }`}
+              >
+                Add Payment
+              </a>
+              <a
+                href="#manageUsers"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleMobileNavClick("manageUsers");
+                }}
+                className={`block px-4 py-3 text-sm transition-colors ${
+                  activeTab === "manageUsers"
+                    ? "text-cyan-400 bg-gray-700"
+                    : "text-gray-300 hover:bg-gray-700"
+                }`}
+              >
+                Manage Users
+              </a>
+            </div>
+          )}
+        </nav>
+        {/* --- END OF NAVIGATION --- */}
+
+        <main className="flex-grow">
           {error && (
             <div
               className="bg-red-800/50 border border-red-600 text-red-200 p-3 rounded-md mb-6 text-center relative text-sm"
@@ -662,7 +767,7 @@ export default function ExpenseManagerApp() {
 const TabButton = ({ name, activeTab, setActiveTab, children }) => (
   <button
     onClick={() => setActiveTab(name)}
-    className={`px-4 py-3 text-sm font-medium transition-colors duration-200 focus:outline-none ml-2 mb-9${
+    className={`px-4 py-3 text-sm font-medium transition-colors duration-200 focus:outline-none -mb-px ${
       activeTab === name
         ? "border-b-2 border-cyan-400 text-cyan-400"
         : "border-b-2 border-transparent text-gray-400 hover:text-white"
@@ -716,7 +821,7 @@ const Dashboard = ({
               {balances.simplifiedDebts.map((debt, index) => (
                 <li
                   key={index}
-                  className="flex items-center justify-between p-3 bg-gray-700 rounded-md text-sm"
+                  className="flex items-center justify-between p-3 bg-gray-700 rounded-md text-sm flex-wrap gap-2"
                 >
                   <div className="flex items-center">
                     <span className="font-bold text-cyan-400">
@@ -727,7 +832,6 @@ const Dashboard = ({
                       {debt.toName}
                     </span>
                   </div>
-                  {/* --- MODIFIED SECTION --- */}
                   <div className="flex items-center gap-4">
                     <span className="font-mono text-lg">
                       Rp{debt.amount.toFixed(2)}
@@ -744,7 +848,6 @@ const Dashboard = ({
                       </button>
                     )}
                   </div>
-                  {/* --- END OF MODIFICATION --- */}
                 </li>
               ))}
             </ul>
@@ -814,7 +917,7 @@ const Dashboard = ({
                     .slice(0, 5)
                     .map((expense) => (
                       <tr key={expense.id} className="hover:bg-gray-700/50">
-                        <td className="p-2">
+                        <td className="p-2 whitespace-nowrap">
                           {new Date(expense.DateOfExpense).toLocaleDateString()}
                         </td>
                         <td className="p-2">{expense.Description}</td>
@@ -824,7 +927,7 @@ const Dashboard = ({
                               ?.UserName
                           }
                         </td>
-                        <td className="p-2 font-mono">
+                        <td className="p-2 font-mono whitespace-nowrap">
                           Rp{expense.TotalAmount.toFixed(2)}
                         </td>
                         <td className="p-2 text-xs text-gray-400">
@@ -838,9 +941,11 @@ const Dashboard = ({
                             .join(", ")}
                         </td>
                         <td className="p-2">
-                          <DeleteButton
-                            onClick={() => onDeleteExpense(expense.id)}
-                          />
+                          {isAdmin && (
+                            <DeleteButton
+                              onClick={() => onDeleteExpense(expense.id)}
+                            />
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -876,7 +981,7 @@ const Dashboard = ({
                     .slice(0, 5)
                     .map((payment) => (
                       <tr key={payment.id} className="hover:bg-gray-700/50">
-                        <td className="p-2">
+                        <td className="p-2 whitespace-nowrap">
                           {new Date(payment.DateOfPayment).toLocaleDateString()}
                         </td>
                         <td className="p-2">
@@ -891,13 +996,15 @@ const Dashboard = ({
                               ?.UserName
                           }
                         </td>
-                        <td className="p-2 font-mono">
+                        <td className="p-2 font-mono whitespace-nowrap">
                           Rp{payment.Amount.toFixed(2)}
                         </td>
                         <td className="p-2">
-                          <DeleteButton
-                            onClick={() => onDeletePayment(payment.id)}
-                          />
+                          {isAdmin && (
+                            <DeleteButton
+                              onClick={() => onDeletePayment(payment.id)}
+                            />
+                          )}
                         </td>
                       </tr>
                     ))}
