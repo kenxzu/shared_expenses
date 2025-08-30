@@ -529,7 +529,9 @@ export default function ExpenseManagerApp() {
             <h1 className="text-4xl font-bold text-cyan-400">
               Expense Manager
             </h1>
-            <h4>Intera 1207 12th floor</h4>
+            <p className="text-gray-400 text-sm mt-1">
+              InternA 1207 12th floor
+            </p>
           </div>
 
           <div className="flex items-center gap-4 text-sm flex-wrap justify-center">
