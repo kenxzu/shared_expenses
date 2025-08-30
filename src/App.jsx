@@ -525,7 +525,13 @@ export default function ExpenseManagerApp() {
 
       <div className="w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 flex-grow flex flex-col">
         <header className="flex flex-col md:flex-row justify-between items-center mb-4 md:mb-8 gap-4">
-          <h1 className="text-4xl font-bold text-cyan-400">Expense Manager</h1>
+          <div>
+            <h1 className="text-4xl font-bold text-cyan-400">
+              Expense Manager
+            </h1>
+            <h4>Intera 1207 12th floor</h4>
+          </div>
+
           <div className="flex items-center gap-4 text-sm flex-wrap justify-center">
             <span className="text-gray-300">
               {user.email}{" "}
@@ -920,7 +926,7 @@ const Dashboard = ({
                         onClick={() => onSettleDebt(debt)}
                         className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs"
                       >
-                        Settle
+                        paid
                       </button>
                     )}
                   </div>
