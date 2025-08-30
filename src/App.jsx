@@ -386,7 +386,7 @@ export default function ExpenseManagerApp() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900 text-white">
-        <div className="text-xl">A 1207...</div>
+        <div className="text-xl">Intern A 1207 Loading...</div>
       </div>
     );
   }
