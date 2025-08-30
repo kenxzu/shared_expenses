@@ -884,6 +884,8 @@ const Dashboard = ({
   onSettleDebt,
   isAdmin,
   loggedInUserId,
+  onDeleteExpense, // <-- ADD THIS
+  onDeletePayment, // <-- AND THIS
 }) => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -988,7 +990,7 @@ const Dashboard = ({
                       (a, b) =>
                         new Date(b.DateOfExpense) - new Date(a.DateOfExpense)
                     )
-                    .slice(0, 5)
+
                     .map((expense) => (
                       <tr key={expense.id} className="hover:bg-gray-700/50">
                         <td className="p-2 whitespace-nowrap">
@@ -1017,7 +1019,7 @@ const Dashboard = ({
                         {isAdmin && (
                           <td className="p-2">
                             <DeleteButton
-                              onClick={() => handleDeleteExpense(expense.id)}
+                              onClick={() => onDeleteExpense(expense.id)}
                             />
                           </td>
                         )}
@@ -1052,7 +1054,7 @@ const Dashboard = ({
                       (a, b) =>
                         new Date(b.DateOfPayment) - new Date(a.DateOfPayment)
                     )
-                    .slice(0, 5)
+
                     .map((payment) => (
                       <tr key={payment.id} className="hover:bg-gray-700/50">
                         <td className="p-2 whitespace-nowrap">
@@ -1076,7 +1078,7 @@ const Dashboard = ({
                         {isAdmin && (
                           <td className="p-2">
                             <DeleteButton
-                              onClick={() => handleDeletePayment(payment.id)}
+                              onClick={() => onDeletePayment(payment.id)}
                             />
                           </td>
                         )}
