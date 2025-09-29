@@ -386,7 +386,7 @@ export default function ExpenseManagerApp() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900 text-white">
-        <div className="text-xl">Intern A 1207 Loading...</div>
+        <div className="text-xl w-screen">Intern A 1207 Please Wait...</div>
       </div>
     );
   }
@@ -473,7 +473,7 @@ export default function ExpenseManagerApp() {
 
   // --- Main App JSX ---
   return (
-    <div className="bg-gray-900 text-gray-100 min-h-screen font-sans flex flex-col">
+    <div className="bg-gray-900 text-gray-100 min-h-screen font-sans flex flex-col w-screen">
       {showAdminLogin && (
         <div className="flex items-center justify-center h-screen fixed inset-0 bg-black bg-opacity-60 z-50">
           <form
@@ -523,7 +523,7 @@ export default function ExpenseManagerApp() {
         </div>
       )}
 
-      <div className="w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 flex-grow flex flex-col">
+      <div className="w-full max-w-7xl p-4 sm:p-6 lg:p-8 flex-grow flex flex-col">
         <header className="flex flex-col md:flex-row justify-between items-center mb-4 md:mb-8 gap-4">
           <div>
             <h1 className="text-4xl font-bold text-cyan-400">
@@ -557,7 +557,7 @@ export default function ExpenseManagerApp() {
         </header>
 
         <nav className="relative mb-8">
-          <div className="hidden md:flex flex-wrap border-b border-gray-700">
+          <div className="hidden md:flex flex-wrap border-b border-gray-700 justify-start">
             <TabButton
               name="dashboard"
               activeTab={activeTab}
@@ -853,7 +853,7 @@ const AuthPage = ({ auth, db, parentSetError, appId, setIsRegistering }) => {
 const TabButton = ({ name, activeTab, setActiveTab, children }) => (
   <button
     onClick={() => setActiveTab(name)}
-    className={`px-4 py-3 text-sm font-medium -mb-px ${
+    className={`px-4 py-3 text-sm font-medium -mb-px ml-1 mb-3 ${
       activeTab === name
         ? "border-b-2 border-cyan-400 text-cyan-400"
         : "border-b-2 border-transparent text-gray-400 hover:text-white"
