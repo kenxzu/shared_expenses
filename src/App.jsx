@@ -332,53 +332,128 @@ export default function ExpenseManagerApp() {
 
   const balances = useMemo(() => {
     if (users.length === 0) return { balances: [], simplifiedDebts: [] };
+
     const userBalances = {};
     users.forEach((user) => (userBalances[user.id] = 0));
+
     expenses.forEach((expense) => {
+      const payerId = expense.PayerID;
+      if (!(payerId in userBalances)) userBalances[payerId] = 0;
+
       expense.splits.forEach((split) => {
-        if (split.UserID !== expense.PayerID) {
-          userBalances[split.UserID] -= split.OwedAmount;
-          userBalances[expense.PayerID] += split.OwedAmount;
+        const splitUserId = split.UserID;
+        const owedAmount = Number(split.OwedAmount) || 0;
+
+        if (!(splitUserId in userBalances)) userBalances[splitUserId] = 0;
+
+        if (splitUserId !== payerId) {
+          userBalances[splitUserId] -= owedAmount;
+          userBalances[payerId] += owedAmount;
         }
       });
     });
+
     payments.forEach((payment) => {
-      userBalances[payment.FromUserID] += payment.Amount;
-      userBalances[payment.ToUserID] -= payment.Amount;
+      const fromId = payment.FromUserID;
+      const toId = payment.ToUserID;
+      const paymentAmount = Number(payment.Amount) || 0;
+
+      if (!(fromId in userBalances)) userBalances[fromId] = 0;
+      if (!(toId in userBalances)) userBalances[toId] = 0;
+
+      userBalances[fromId] += paymentAmount;
+      userBalances[toId] -= paymentAmount;
     });
+
+    const EPSILON = 0.005; // smooth out rounding noise below half a cent
+
     const balancesArray = Object.entries(userBalances).map(
-      ([userId, balance]) => ({
-        userId,
-        userName: users.find((u) => u.id === userId)?.UserName || "Unknown",
-        balance: parseFloat(balance.toFixed(2)),
-      })
+      ([userId, balance]) => {
+        const numericBalance = Number(balance) || 0;
+        const normalizedBalance =
+          Math.abs(numericBalance) < EPSILON ? 0 : numericBalance;
+        const balanceCents = Math.round(normalizedBalance * 100);
+
+        return {
+          userId,
+          userName: users.find((u) => u.id === userId)?.UserName || "Unknown",
+          balanceCents,
+        };
+      }
     );
-    const debtors = balancesArray
-      .filter((b) => b.balance < 0)
-      .map((b) => ({ ...b, balance: -b.balance }))
-      .sort((a, b) => a.balance - b.balance);
-    const creditors = balancesArray
-      .filter((b) => b.balance > 0)
-      .sort((a, b) => a.balance - b.balance);
+
+    let totalCents = balancesArray.reduce(
+      (sum, entry) => sum + entry.balanceCents,
+      0
+    );
+
+    if (totalCents !== 0 && balancesArray.length > 0) {
+      const adjustTarget = balancesArray.reduce(
+        (prev, current) =>
+          Math.abs(current.balanceCents) > Math.abs(prev.balanceCents)
+            ? current
+            : prev,
+        balancesArray[0]
+      );
+      adjustTarget.balanceCents -= totalCents;
+      totalCents = 0;
+    }
+
+    balancesArray.forEach((entry) => {
+      entry.balance = Number((entry.balanceCents / 100).toFixed(2));
+    });
+
+    const debtorsQueue = balancesArray
+      .filter((b) => b.balanceCents < 0)
+      .map((b) => ({
+        userId: b.userId,
+        userName: b.userName,
+        remainingCents: -b.balanceCents,
+      }))
+      .sort((a, b) => a.remainingCents - b.remainingCents);
+
+    const creditorsQueue = balancesArray
+      .filter((b) => b.balanceCents > 0)
+      .map((b) => ({
+        userId: b.userId,
+        userName: b.userName,
+        remainingCents: b.balanceCents,
+      }))
+      .sort((a, b) => a.remainingCents - b.remainingCents);
+
     const simplifiedDebts = [];
-    while (debtors.length > 0 && creditors.length > 0) {
-      const debtor = debtors[0];
-      const creditor = creditors[0];
-      const amount = Math.min(debtor.balance, creditor.balance);
-      if (amount > 0.001) {
+    while (debtorsQueue.length > 0 && creditorsQueue.length > 0) {
+      const debtor = debtorsQueue[0];
+      const creditor = creditorsQueue[0];
+      const settlementCents = Math.min(
+        debtor.remainingCents,
+        creditor.remainingCents
+      );
+
+      if (settlementCents > 0) {
         simplifiedDebts.push({
           from: debtor.userId,
           fromName: debtor.userName,
           to: creditor.userId,
           toName: creditor.userName,
-          amount: parseFloat(amount.toFixed(2)),
+          amount: Number((settlementCents / 100).toFixed(2)),
         });
       }
-      debtor.balance -= amount;
-      creditor.balance -= amount;
-      if (debtor.balance < 0.001) debtors.shift();
-      if (creditor.balance < 0.001) creditors.shift();
+
+      debtor.remainingCents -= settlementCents;
+      creditor.remainingCents -= settlementCents;
+
+      if (debtor.remainingCents === 0) debtorsQueue.shift();
+      if (creditor.remainingCents === 0) creditorsQueue.shift();
     }
+
+    if (simplifiedDebts.length === 0) {
+      balancesArray.forEach((entry) => {
+        entry.balance = 0;
+        entry.balanceCents = 0;
+      });
+    }
+
     return { balances: balancesArray, simplifiedDebts };
   }, [users, expenses, payments]);
 
@@ -936,7 +1011,7 @@ const Dashboard = ({
               ))}
             </ul>
           ) : (
-            <p className="text-gray-400">Everyone is settled up!</p>
+            <p className="text-gray-400">Tidak ada yang berhutang!</p>
           )}
         </Card>
       </div>
