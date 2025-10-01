@@ -252,6 +252,26 @@ export default function ExpenseManagerApp() {
     }
   };
 
+  const handleSettleAllDebts = async (debts) => {
+    if (!db || !Array.isArray(debts) || debts.length === 0) return;
+    try {
+      const publicDataPath = `artifacts/${appId}/public/data`;
+      const nowIso = new Date().toISOString();
+      await Promise.all(
+        debts.map((debt) =>
+          addDoc(collection(db, `${publicDataPath}/payments`), {
+            FromUserID: debt.from,
+            ToUserID: debt.to,
+            Amount: Number(Number(debt.amount).toFixed(2)),
+            DateOfPayment: nowIso,
+          })
+        )
+      );
+    } catch (err) {
+      setError("Failed to settle all balances.");
+    }
+  };
+
   const handleDeleteUser = async (userIdToDelete) => {
     if (
       expenses.some(
@@ -340,9 +360,31 @@ export default function ExpenseManagerApp() {
       const payerId = expense.PayerID;
       if (!(payerId in userBalances)) userBalances[payerId] = 0;
 
-      expense.splits.forEach((split) => {
+      // Prefer stored splits if they sum exactly to total; otherwise recompute equal shares by cents
+      const totalCents = Math.round((Number(expense.TotalAmount) || 0) * 100);
+      const n = expense.splits.length || 0;
+      const storedSumCents = expense.splits.reduce(
+        (sum, s) => sum + Math.round((Number(s.OwedAmount) || 0) * 100),
+        0
+      );
+
+      let sharesCents = [];
+      if (n > 0 && storedSumCents === totalCents) {
+        sharesCents = expense.splits.map((s) =>
+          Math.round((Number(s.OwedAmount) || 0) * 100)
+        );
+      } else if (n > 0) {
+        const baseShare = Math.floor(totalCents / n);
+        const remainder = totalCents - baseShare * n;
+        sharesCents = expense.splits.map((_, idx) =>
+          baseShare + (idx < remainder ? 1 : 0)
+        );
+      }
+
+      expense.splits.forEach((split, idx) => {
         const splitUserId = split.UserID;
-        const owedAmount = Number(split.OwedAmount) || 0;
+        const owedCents = sharesCents[idx] || 0;
+        const owedAmount = owedCents / 100;
 
         if (!(splitUserId in userBalances)) userBalances[splitUserId] = 0;
 
@@ -495,6 +537,7 @@ export default function ExpenseManagerApp() {
             onDeleteExpense={handleDeleteExpense}
             onDeletePayment={handleDeletePayment}
             onSettleDebt={handleSettleDebt}
+            onSettleAllDebts={handleSettleAllDebts}
             isAdmin={isAdmin}
             loggedInUserId={user.uid}
           />
@@ -539,6 +582,7 @@ export default function ExpenseManagerApp() {
             onDeleteExpense={handleDeleteExpense}
             onDeletePayment={handleDeletePayment}
             onSettleDebt={handleSettleDebt}
+            onSettleAllDebts={handleSettleAllDebts}
             isAdmin={isAdmin}
             loggedInUserId={user.uid}
           />
@@ -965,6 +1009,7 @@ const Dashboard = ({
   payments,
   balances,
   onSettleDebt,
+  onSettleAllDebts,
   isAdmin,
   loggedInUserId,
   onDeleteExpense, // <-- ADD THIS
@@ -978,6 +1023,16 @@ const Dashboard = ({
             <DollarSignIcon />
             Balance Summary
           </CardTitle>
+          {isAdmin && balances.simplifiedDebts.length > 0 && (
+            <div className="flex justify-end mb-3">
+              <button
+                onClick={() => onSettleAllDebts(balances.simplifiedDebts)}
+                className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-1 px-3 rounded-md text-xs"
+              >
+                Settle All
+              </button>
+            </div>
+          )}
           {balances.simplifiedDebts.length > 0 ? (
             <ul className="space-y-3">
               {balances.simplifiedDebts.map((debt, index) => (
@@ -1232,30 +1287,47 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
     );
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const amount = parseFloat(totalAmount);
-    if (!description || !amount || !payerId || splitWith.length === 0)
+    // Parse to integer cents from the raw input to avoid any FP errors
+    const raw = String(totalAmount).trim();
+    const normalizedRaw = raw
+      .replace(/,/g, ".") // support comma decimals
+      .replace(/[^0-9.]/g, "");
+    const [intPart = "0", decRaw = ""] = normalizedRaw.split(".");
+    const decPart = (decRaw + "00").slice(0, 2);
+    const totalCents = (parseInt(intPart || "0", 10) || 0) * 100 +
+      (parseInt(decPart || "0", 10) || 0);
+
+    if (!description || totalCents === 0 || !payerId || splitWith.length === 0)
       return setError("Please fill all fields.");
-    if (amount <= 0) return setError("Amount must be positive.");
+    if (totalCents <= 0) return setError("Amount must be positive.");
     try {
       const publicDataPath = `artifacts/${appId}/public/data`;
       const expenseDocRef = await addDoc(
         collection(db, `${publicDataPath}/expenses`),
         {
           Description: description,
-          TotalAmount: amount,
+          // Store normalized amount derived from integer cents
+          TotalAmount: Number((totalCents / 100).toFixed(2)),
           DateOfExpense: new Date().toISOString(),
           PayerID: payerId,
         }
       );
-      const owedAmount = amount / splitWith.length;
+      // Compute equal split from integer cents and distribute remainder fairly
+      const n = splitWith.length;
+      const baseShare = Math.floor(totalCents / n);
+      const remainder = totalCents - baseShare * n; // number of users that get +1 cent
+
+      // Use a stable order so remainder distribution is deterministic
+      const recipients = [...splitWith];
       await Promise.all(
-        splitWith.map((userId) =>
-          addDoc(collection(db, `${publicDataPath}/expenseSplits`), {
+        recipients.map((userId, idx) => {
+          const shareCents = baseShare + (idx < remainder ? 1 : 0);
+          return addDoc(collection(db, `${publicDataPath}/expenseSplits`), {
             ExpenseID: expenseDocRef.id,
             UserID: userId,
-            OwedAmount: owedAmount,
-          })
-        )
+            OwedAmount: Number((shareCents / 100).toFixed(2)),
+          });
+        })
       );
       setActiveTab("dashboard");
     } catch (err) {
@@ -1343,17 +1415,26 @@ const AddPaymentForm = ({ db, users, setError, setActiveTab, appId }) => {
   const [amount, setAmount] = useState("");
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const paymentAmount = parseFloat(amount);
-    if (!fromUserId || !toUserId || !paymentAmount)
+    // Robustly parse to integer cents
+    const raw = String(amount).trim();
+    const normalizedRaw = raw
+      .replace(/,/g, ".")
+      .replace(/[^0-9.]/g, "");
+    const [intPart = "0", decRaw = ""] = normalizedRaw.split(".");
+    const decPart = (decRaw + "00").slice(0, 2);
+    const amountCents = (parseInt(intPart || "0", 10) || 0) * 100 +
+      (parseInt(decPart || "0", 10) || 0);
+
+    if (!fromUserId || !toUserId || amountCents === 0)
       return setError("Please fill all fields.");
     if (fromUserId === toUserId)
       return setError("Cannot make a payment to the same user.");
-    if (paymentAmount <= 0) return setError("Amount must be positive.");
+    if (amountCents <= 0) return setError("Amount must be positive.");
     try {
       await addDoc(collection(db, `artifacts/${appId}/public/data/payments`), {
         FromUserID: fromUserId,
         ToUserID: toUserId,
-        Amount: paymentAmount,
+        Amount: Number((amountCents / 100).toFixed(2)),
         DateOfPayment: new Date().toISOString(),
       });
       setActiveTab("dashboard");
