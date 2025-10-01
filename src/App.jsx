@@ -125,7 +125,8 @@ export default function ExpenseManagerApp() {
 
   // --- Data State ---
   const [users, setUsers] = useState([]);
-  const [expenses, setExpenses] = useState([]);
+  const [expensesBase, setExpensesBase] = useState([]);
+  const [expenseSplits, setExpenseSplits] = useState([]);
   const [payments, setPayments] = useState([]);
 
   // --- UI State ---
@@ -205,25 +206,17 @@ export default function ExpenseManagerApp() {
       ),
       onSnapshot(
         query(collection(db, `${publicDataPath}/expenses`)),
-        async (snapshot) => {
-          const expensesData = await Promise.all(
-            snapshot.docs.map(async (doc) => {
-              const expense = { id: doc.id, ...doc.data() };
-              const splitsSnapshot = await getDocs(
-                query(
-                  collection(db, `${publicDataPath}/expenseSplits`),
-                  where("ExpenseID", "==", doc.id)
-                )
-              );
-              expense.splits = splitsSnapshot.docs.map((splitDoc) => ({
-                id: splitDoc.id,
-                ...splitDoc.data(),
-              }));
-              return expense;
-            })
-          );
-          setExpenses(expensesData);
-        }
+        (snapshot) =>
+          setExpensesBase(
+            snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+          )
+      ),
+      onSnapshot(
+        query(collection(db, `${publicDataPath}/expenseSplits`)),
+        (snapshot) =>
+          setExpenseSplits(
+            snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+          )
       ),
       onSnapshot(
         query(collection(db, `${publicDataPath}/payments`)),
@@ -236,6 +229,21 @@ export default function ExpenseManagerApp() {
     return () => unsubscribes.forEach((unsub) => unsub());
   }, [user, db, appId]);
 
+  // Join expenses with latest splits reactively
+  const expensesJoined = useMemo(() => {
+    if (!expensesBase || expensesBase.length === 0) return [];
+    const splitsByExpense = new Map();
+    (expenseSplits || []).forEach((s) => {
+      const key = s.ExpenseID;
+      if (!splitsByExpense.has(key)) splitsByExpense.set(key, []);
+      splitsByExpense.get(key).push(s);
+    });
+    return expensesBase.map((e) => ({
+      ...e,
+      splits: splitsByExpense.get(e.id) || [],
+    }));
+  }, [expensesBase, expenseSplits]);
+
   // --- Logic Handlers ---
   const handleSettleDebt = async (debt) => {
     if (!db) return;
@@ -244,7 +252,7 @@ export default function ExpenseManagerApp() {
       await addDoc(collection(db, `${publicDataPath}/payments`), {
         FromUserID: debt.from,
         ToUserID: debt.to,
-        Amount: debt.amount,
+        Amount: Number(Number(debt.amount).toFixed(2)),
         DateOfPayment: new Date().toISOString(),
       });
     } catch (err) {
@@ -272,9 +280,30 @@ export default function ExpenseManagerApp() {
     }
   };
 
+  const handleZeroOutBalances = async (netDebts) => {
+    // netDebts is expected to be balances.simplifiedDebts
+    if (!db || !Array.isArray(netDebts) || netDebts.length === 0) return;
+    try {
+      const publicDataPath = `artifacts/${appId}/public/data`;
+      const nowIso = new Date().toISOString();
+      await Promise.all(
+        netDebts.map((debt) =>
+          addDoc(collection(db, `${publicDataPath}/payments`), {
+            FromUserID: debt.from,
+            ToUserID: debt.to,
+            Amount: Number(Number(debt.amount).toFixed(2)),
+            DateOfPayment: nowIso,
+          })
+        )
+      );
+    } catch (err) {
+      setError("Failed to zero out balances.");
+    }
+  };
+
   const handleDeleteUser = async (userIdToDelete) => {
     if (
-      expenses.some(
+      expensesJoined.some(
         (e) =>
           e.PayerID === userIdToDelete ||
           e.splits.some((s) => s.UserID === userIdToDelete)
@@ -358,7 +387,7 @@ export default function ExpenseManagerApp() {
     // Build per-expense who-owes-who list
     const perExpenseDebtsByExpense = [];
 
-    expenses.forEach((expense) => {
+    expensesJoined.forEach((expense) => {
       const payerId = expense.PayerID;
       if (!(payerId in userBalances)) userBalances[payerId] = 0;
       
@@ -524,13 +553,90 @@ export default function ExpenseManagerApp() {
     // Flatten per-expense debts for convenient bulk actions
     const perExpenseDebtsFlat = perExpenseDebtsByExpense.flatMap((g) => g.items);
 
+    // Compute remaining debts by applying payments to earlier debts only (time-aware)
+    // 1) Flatten debts with dates and work in cents
+    const debtsFlat = perExpenseDebtsByExpense.flatMap((g) =>
+      g.items.map((it) => ({
+        expenseId: g.expenseId,
+        description: g.description,
+        date: g.date ? new Date(g.date).getTime() : 0,
+        payerId: g.payerId,
+        payerName: g.payerName,
+        from: it.from,
+        fromName: it.fromName,
+        to: it.to,
+        toName: it.toName,
+        remainingCents: Math.round((Number(it.amount) || 0) * 100),
+      }))
+    ).sort((a, b) => a.date - b.date);
+
+    // 2) Sort payments by time and apply to earliest matching debts (same direction) with older/equal date
+    const paymentsSorted = [...payments]
+      .map((p) => ({
+        from: p.FromUserID,
+        to: p.ToUserID,
+        cents: Math.round((Number(p.Amount) || 0) * 100),
+        date: p.DateOfPayment ? new Date(p.DateOfPayment).getTime() : 0,
+      }))
+      .sort((a, b) => a.date - b.date);
+
+    paymentsSorted.forEach((pay) => {
+      if (!pay.cents) return;
+      for (let i = 0; i < debtsFlat.length && pay.cents > 0; i++) {
+        const d = debtsFlat[i];
+        if (d.remainingCents <= 0) continue;
+        if (d.date > pay.date) break; // future debt; later payments will handle
+        if (d.from === pay.from && d.to === pay.to) {
+          const applied = Math.min(d.remainingCents, pay.cents);
+          d.remainingCents -= applied;
+          pay.cents -= applied;
+        }
+      }
+    });
+
+    // 3) Rebuild remaining group list
+    const remainingByExpense = new Map();
+    debtsFlat.forEach((d) => {
+      if (d.remainingCents <= 0) return;
+      if (!remainingByExpense.has(d.expenseId)) {
+        remainingByExpense.set(d.expenseId, {
+          expenseId: d.expenseId,
+          description: d.description,
+          date: d.date ? new Date(d.date).toISOString() : null,
+          payerId: d.payerId,
+          payerName: d.payerName,
+          items: [],
+        });
+      }
+      remainingByExpense.get(d.expenseId).items.push({
+        from: d.from,
+        fromName: d.fromName,
+        to: d.to,
+        toName: d.toName,
+        amount: Number((d.remainingCents / 100).toFixed(2)),
+      });
+    });
+
+    const perExpenseDebtsByExpenseRemaining = Array.from(remainingByExpense.values());
+    const perExpenseDebtsFlatRemaining = debtsFlat
+      .filter((d) => d.remainingCents > 0)
+      .map((d) => ({
+        from: d.from,
+        fromName: d.fromName,
+        to: d.to,
+        toName: d.toName,
+        amount: Number((d.remainingCents / 100).toFixed(2)),
+      }));
+
     return {
       balances: balancesArray,
       simplifiedDebts,
       perExpenseDebtsByExpense,
       perExpenseDebtsFlat,
+      perExpenseDebtsByExpenseRemaining,
+      perExpenseDebtsFlatRemaining,
     };
-  }, [users, expenses, payments]);
+  }, [users, expensesJoined, payments]);
 
   // --- Render Logic ---
   if (loading) {
@@ -564,19 +670,20 @@ export default function ExpenseManagerApp() {
         return (
           <Dashboard
             users={users}
-            expenses={expenses}
+            expenses={expensesJoined}
             payments={payments}
             balances={balances}
             onDeleteExpense={handleDeleteExpense}
             onDeletePayment={handleDeletePayment}
             onSettleDebt={handleSettleDebt}
             onSettleAllDebts={handleSettleAllDebts}
+            onZeroOutBalances={handleZeroOutBalances}
             isAdmin={isAdmin}
             loggedInUserId={user.uid}
           />
         );
       case "addExpense":
-        return isAdmin ? (
+        return (
           <AddExpenseForm
             db={db}
             users={users}
@@ -584,8 +691,6 @@ export default function ExpenseManagerApp() {
             setActiveTab={setActiveTab}
             appId={appId}
           />
-        ) : (
-          <div className="text-center text-red-400">Admin access required.</div>
         );
       case "addPayment":
         return isAdmin ? (
@@ -609,13 +714,14 @@ export default function ExpenseManagerApp() {
         return (
           <Dashboard
             users={users}
-            expenses={expenses}
+            expenses={expensesJoined}
             payments={payments}
             balances={balances}
             onDeleteExpense={handleDeleteExpense}
             onDeletePayment={handleDeletePayment}
             onSettleDebt={handleSettleDebt}
             onSettleAllDebts={handleSettleAllDebts}
+            onZeroOutBalances={handleZeroOutBalances}
             isAdmin={isAdmin}
             loggedInUserId={user.uid}
           />
@@ -717,15 +823,15 @@ export default function ExpenseManagerApp() {
             >
               Dashboard
             </TabButton>
+            <TabButton
+              name="addExpense"
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+            >
+              Add Expense
+            </TabButton>
             {isAdmin && (
               <>
-                <TabButton
-                  name="addExpense"
-                  activeTab={activeTab}
-                  setActiveTab={setActiveTab}
-                >
-                  Add Expense
-                </TabButton>
                 <TabButton
                   name="addPayment"
                   activeTab={activeTab}
@@ -767,22 +873,22 @@ export default function ExpenseManagerApp() {
               >
                 Dashboard
               </a>
+              <a
+                href="#addExpense"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleMobileNavClick("addExpense");
+                }}
+                className={`block px-4 py-3 text-sm ${
+                  activeTab === "addExpense"
+                    ? "text-cyan-400 bg-gray-700"
+                    : "text-gray-300 hover:bg-gray-700"
+                }`}
+              >
+                Add Expense
+              </a>
               {isAdmin && (
                 <>
-                  <a
-                    href="#addExpense"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      handleMobileNavClick("addExpense");
-                    }}
-                    className={`block px-4 py-3 text-sm ${
-                      activeTab === "addExpense"
-                        ? "text-cyan-400 bg-gray-700"
-                        : "text-gray-300 hover:bg-gray-700"
-                    }`}
-                  >
-                    Add Expense
-                  </a>
                   <a
                     href="#addPayment"
                     onClick={(e) => {
@@ -1043,6 +1149,7 @@ const Dashboard = ({
   balances,
   onSettleDebt,
   onSettleAllDebts,
+  onZeroOutBalances,
   isAdmin,
   loggedInUserId,
   onDeleteExpense, // <-- ADD THIS
@@ -1056,19 +1163,29 @@ const Dashboard = ({
             <DollarSignIcon />
             Balance Summary
           </CardTitle>
-          {isAdmin && balances.perExpenseDebtsFlat && balances.perExpenseDebtsFlat.length > 0 && (
-            <div className="flex justify-end mb-3">
-              <button
-                onClick={() => onSettleAllDebts(balances.perExpenseDebtsFlat)}
-                className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-1 px-3 rounded-md text-xs"
-              >
-                Settle All
-              </button>
+          {isAdmin && (
+            <div className="flex justify-end mb-3 gap-2">
+              {balances.perExpenseDebtsFlatRemaining && balances.perExpenseDebtsFlatRemaining.length > 0 && (
+                <button
+                  onClick={() => onSettleAllDebts(balances.perExpenseDebtsFlatRemaining)}
+                  className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-1 px-3 rounded-md text-xs"
+                >
+                  Settle All (per expense)
+                </button>
+              )}
+              {balances.simplifiedDebts && balances.simplifiedDebts.length > 0 && (
+                <button
+                  onClick={() => onZeroOutBalances(balances.simplifiedDebts)}
+                  className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs"
+                >
+                  Zero Balances
+                </button>
+              )}
             </div>
           )}
-          {balances.perExpenseDebtsByExpense && balances.perExpenseDebtsByExpense.length > 0 ? (
+          {balances.perExpenseDebtsByExpenseRemaining && balances.perExpenseDebtsByExpenseRemaining.length > 0 ? (
             <div className="space-y-4">
-              {balances.perExpenseDebtsByExpense.map((grp) => (
+              {balances.perExpenseDebtsByExpenseRemaining.map((grp) => (
                 <div key={grp.expenseId} className="bg-gray-700/40 rounded-md p-3">
                   <div className="flex items-center justify-between mb-2 text-sm text-gray-300">
                     <div>
