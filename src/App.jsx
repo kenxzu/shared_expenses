@@ -280,27 +280,6 @@ export default function ExpenseManagerApp() {
     }
   };
 
-  const handleZeroOutBalances = async (netDebts) => {
-    // netDebts is expected to be balances.simplifiedDebts
-    if (!db || !Array.isArray(netDebts) || netDebts.length === 0) return;
-    try {
-      const publicDataPath = `artifacts/${appId}/public/data`;
-      const nowIso = new Date().toISOString();
-      await Promise.all(
-        netDebts.map((debt) =>
-          addDoc(collection(db, `${publicDataPath}/payments`), {
-            FromUserID: debt.from,
-            ToUserID: debt.to,
-            Amount: Number(Number(debt.amount).toFixed(2)),
-            DateOfPayment: nowIso,
-          })
-        )
-      );
-    } catch (err) {
-      setError("Failed to zero out balances.");
-    }
-  };
-
   const handleDeleteUser = async (userIdToDelete) => {
     if (
       expensesJoined.some(
@@ -390,7 +369,7 @@ export default function ExpenseManagerApp() {
     expensesJoined.forEach((expense) => {
       const payerId = expense.PayerID;
       if (!(payerId in userBalances)) userBalances[payerId] = 0;
-      
+
       // Prefer stored splits if they sum exactly to total; otherwise recompute equal shares by cents
       const totalCents = Math.round((Number(expense.TotalAmount) || 0) * 100);
       const n = expense.splits.length || 0;
@@ -407,8 +386,8 @@ export default function ExpenseManagerApp() {
       } else if (n > 0) {
         const baseShare = Math.floor(totalCents / n);
         const remainder = totalCents - baseShare * n;
-        sharesCents = expense.splits.map((_, idx) =>
-          baseShare + (idx < remainder ? 1 : 0)
+        sharesCents = expense.splits.map(
+          (_, idx) => baseShare + (idx < remainder ? 1 : 0)
         );
       }
 
@@ -439,14 +418,14 @@ export default function ExpenseManagerApp() {
             fromName:
               users.find((u) => u.id === splitUserId)?.UserName || "Unknown",
             to: payerId,
-            toName:
-              users.find((u) => u.id === payerId)?.UserName || "Unknown",
+            toName: users.find((u) => u.id === payerId)?.UserName || "Unknown",
             amount: Number((owedCents / 100).toFixed(2)),
           });
         }
       });
 
-      if (expenseGroup.items.length > 0) perExpenseDebtsByExpense.push(expenseGroup);
+      if (expenseGroup.items.length > 0)
+        perExpenseDebtsByExpense.push(expenseGroup);
     });
 
     payments.forEach((payment) => {
@@ -551,24 +530,28 @@ export default function ExpenseManagerApp() {
     }
 
     // Flatten per-expense debts for convenient bulk actions
-    const perExpenseDebtsFlat = perExpenseDebtsByExpense.flatMap((g) => g.items);
+    const perExpenseDebtsFlat = perExpenseDebtsByExpense.flatMap(
+      (g) => g.items
+    );
 
     // Compute remaining debts by applying payments to earlier debts only (time-aware)
     // 1) Flatten debts with dates and work in cents
-    const debtsFlat = perExpenseDebtsByExpense.flatMap((g) =>
-      g.items.map((it) => ({
-        expenseId: g.expenseId,
-        description: g.description,
-        date: g.date ? new Date(g.date).getTime() : 0,
-        payerId: g.payerId,
-        payerName: g.payerName,
-        from: it.from,
-        fromName: it.fromName,
-        to: it.to,
-        toName: it.toName,
-        remainingCents: Math.round((Number(it.amount) || 0) * 100),
-      }))
-    ).sort((a, b) => a.date - b.date);
+    const debtsFlat = perExpenseDebtsByExpense
+      .flatMap((g) =>
+        g.items.map((it) => ({
+          expenseId: g.expenseId,
+          description: g.description,
+          date: g.date ? new Date(g.date).getTime() : 0,
+          payerId: g.payerId,
+          payerName: g.payerName,
+          from: it.from,
+          fromName: it.fromName,
+          to: it.to,
+          toName: it.toName,
+          remainingCents: Math.round((Number(it.amount) || 0) * 100),
+        }))
+      )
+      .sort((a, b) => a.date - b.date);
 
     // 2) Sort payments by time and apply to earliest matching debts (same direction) with older/equal date
     const paymentsSorted = [...payments]
@@ -617,7 +600,9 @@ export default function ExpenseManagerApp() {
       });
     });
 
-    const perExpenseDebtsByExpenseRemaining = Array.from(remainingByExpense.values());
+    const perExpenseDebtsByExpenseRemaining = Array.from(
+      remainingByExpense.values()
+    );
     const perExpenseDebtsFlatRemaining = debtsFlat
       .filter((d) => d.remainingCents > 0)
       .map((d) => ({
@@ -677,7 +662,6 @@ export default function ExpenseManagerApp() {
             onDeletePayment={handleDeletePayment}
             onSettleDebt={handleSettleDebt}
             onSettleAllDebts={handleSettleAllDebts}
-            onZeroOutBalances={handleZeroOutBalances}
             isAdmin={isAdmin}
             loggedInUserId={user.uid}
           />
@@ -721,7 +705,6 @@ export default function ExpenseManagerApp() {
             onDeletePayment={handleDeletePayment}
             onSettleDebt={handleSettleDebt}
             onSettleAllDebts={handleSettleAllDebts}
-            onZeroOutBalances={handleZeroOutBalances}
             isAdmin={isAdmin}
             loggedInUserId={user.uid}
           />
@@ -1149,7 +1132,6 @@ const Dashboard = ({
   balances,
   onSettleDebt,
   onSettleAllDebts,
-  onZeroOutBalances,
   isAdmin,
   loggedInUserId,
   onDeleteExpense, // <-- ADD THIS
@@ -1157,7 +1139,7 @@ const Dashboard = ({
 }) => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      <div className="lg:col-span-2">
+      <div className="lg:col-span-3">
         <Card>
           <CardTitle>
             <DollarSignIcon />
@@ -1165,104 +1147,88 @@ const Dashboard = ({
           </CardTitle>
           {isAdmin && (
             <div className="flex justify-end mb-3 gap-2">
-              {balances.perExpenseDebtsFlatRemaining && balances.perExpenseDebtsFlatRemaining.length > 0 && (
-                <button
-                  onClick={() => onSettleAllDebts(balances.perExpenseDebtsFlatRemaining)}
-                  className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-1 px-3 rounded-md text-xs"
-                >
-                  Settle All (per expense)
-                </button>
-              )}
-              {balances.simplifiedDebts && balances.simplifiedDebts.length > 0 && (
-                <button
-                  onClick={() => onZeroOutBalances(balances.simplifiedDebts)}
-                  className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs"
-                >
-                  Zero Balances
-                </button>
-              )}
+              {balances.perExpenseDebtsFlatRemaining &&
+                balances.perExpenseDebtsFlatRemaining.length > 0 && (
+                  <button
+                    onClick={() =>
+                      onSettleAllDebts(balances.perExpenseDebtsFlatRemaining)
+                    }
+                    className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-1 px-3 rounded-md text-xs"
+                  >
+                    Settle All (per expense)
+                  </button>
+                )}
             </div>
           )}
-          {balances.perExpenseDebtsByExpenseRemaining && balances.perExpenseDebtsByExpenseRemaining.length > 0 ? (
+          {balances.perExpenseDebtsByExpenseRemaining &&
+          balances.perExpenseDebtsByExpenseRemaining.length > 0 ? (
             <div className="space-y-4">
-              {balances.perExpenseDebtsByExpenseRemaining.map((grp) => (
-                <div key={grp.expenseId} className="bg-gray-700/40 rounded-md p-3">
-                  <div className="flex items-center justify-between mb-2 text-sm text-gray-300">
-                    <div>
-                      <span className="font-semibold text-white">{grp.description || "(No description)"}</span>
-                      <span className="ml-2 text-xs text-gray-400">{grp.date ? new Date(grp.date).toLocaleDateString() : ""}</span>
+              {[...balances.perExpenseDebtsByExpenseRemaining]
+                .sort((a, b) => {
+                  const ad = a.date ? new Date(a.date).getTime() : 0;
+                  const bd = b.date ? new Date(b.date).getTime() : 0;
+                  return bd - ad; // newest first
+                })
+                .map((grp) => (
+                  <div
+                    key={grp.expenseId}
+                    className="bg-gray-700/40 rounded-md p-3"
+                  >
+                    <div className="flex items-center justify-between mb-2 text-sm text-gray-300">
+                      <div>
+                        <span className="font-semibold text-white">
+                          {grp.description || "(No description)"}
+                        </span>
+                        <span className="ml-2 text-xs text-gray-400">
+                          {grp.date
+                            ? new Date(grp.date).toLocaleDateString()
+                            : ""}
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        Paid by {grp.payerName}
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-400">Paid by {grp.payerName}</div>
+                    <ul className="space-y-2">
+                      {grp.items.map((debt, idx) => (
+                        <li
+                          key={`${grp.expenseId}-${idx}`}
+                          className="flex items-center justify-between p-2 bg-gray-700 rounded-md text-sm flex-wrap gap-2"
+                        >
+                          <div className="flex items-center">
+                            <span className="font-bold text-cyan-400">
+                              {debt.fromName}
+                            </span>
+                            <ArrowRightIcon />
+                            <span className="font-bold text-green-400">
+                              {debt.toName}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className="font-mono text-base">
+                              Rp{debt.amount.toFixed(2)}
+                            </span>
+                            {loggedInUserId === debt.to && (
+                              <button
+                                onClick={() => onSettleDebt(debt)}
+                                className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs"
+                              >
+                                paid
+                              </button>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <ul className="space-y-2">
-                    {grp.items.map((debt, idx) => (
-                      <li
-                        key={`${grp.expenseId}-${idx}`}
-                        className="flex items-center justify-between p-2 bg-gray-700 rounded-md text-sm flex-wrap gap-2"
-                      >
-                        <div className="flex items-center">
-                          <span className="font-bold text-cyan-400">{debt.fromName}</span>
-                          <ArrowRightIcon />
-                          <span className="font-bold text-green-400">{debt.toName}</span>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <span className="font-mono text-base">Rp{debt.amount.toFixed(2)}</span>
-                          {loggedInUserId === debt.to && (
-                            <button
-                              onClick={() => onSettleDebt(debt)}
-                              className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs"
-                            >
-                              paid
-                            </button>
-                          )}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
+                ))}
             </div>
           ) : (
             <p className="text-gray-400">Tidak ada yang berhutang!</p>
           )}
         </Card>
       </div>
-      <div>
-        <Card>
-          <CardTitle>
-            <UserIcon />
-            Group Members
-          </CardTitle>
-          {users.length > 0 ? (
-            <ul className="space-y-2">
-              {users.map((user) => (
-                <li
-                  key={user.id}
-                  className="flex justify-between items-center text-gray-300"
-                >
-                  <span>{user.UserName}</span>
-                  <span
-                    className={`font-mono text-sm px-2 py-1 rounded ${
-                      (balances.balances.find((b) => b.userId === user.id)
-                        ?.balance ?? 0) >= 0
-                        ? "text-green-300 bg-green-900/50"
-                        : "text-red-300 bg-red-900/50"
-                    }`}
-                  >
-                    Rp
-                    {(
-                      balances.balances.find((b) => b.userId === user.id)
-                        ?.balance ?? 0
-                    ).toFixed(2)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-gray-400">No users added yet.</p>
-          )}
-        </Card>
-      </div>
+
       <div className="lg:col-span-3">
         <Card>
           <CardTitle>Recent Expenses</CardTitle>
@@ -1451,7 +1417,8 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
       .replace(/[^0-9.]/g, "");
     const [intPart = "0", decRaw = ""] = normalizedRaw.split(".");
     const decPart = (decRaw + "00").slice(0, 2);
-    const totalCents = (parseInt(intPart || "0", 10) || 0) * 100 +
+    const totalCents =
+      (parseInt(intPart || "0", 10) || 0) * 100 +
       (parseInt(decPart || "0", 10) || 0);
 
     if (!description || totalCents === 0 || !payerId || splitWith.length === 0)
@@ -1474,15 +1441,25 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
       const baseShare = Math.floor(totalCents / n);
       const remainder = totalCents - baseShare * n; // number of users that get +1 cent
 
+      // Rounding rule: round each share to the nearest Rp1000 with threshold 500
+      // If remainder within 1000 band is > 500, round up; if < 500, round down; =500 => down.
+      const UNIT_THOUSAND_CENTS = 100000; // 1000 Rupiah in cents
+      const roundToThousandCents = (cents) => {
+        const rem = cents % UNIT_THOUSAND_CENTS;
+        if (rem > 50000) return cents - rem + UNIT_THOUSAND_CENTS;
+        return cents - rem; // <= 50000 rounds down
+      };
+
       // Use a stable order so remainder distribution is deterministic
       const recipients = [...splitWith];
       await Promise.all(
         recipients.map((userId, idx) => {
-          const shareCents = baseShare + (idx < remainder ? 1 : 0);
+          const rawShareCents = baseShare + (idx < remainder ? 1 : 0);
+          const shareCentsRounded = roundToThousandCents(rawShareCents);
           return addDoc(collection(db, `${publicDataPath}/expenseSplits`), {
             ExpenseID: expenseDocRef.id,
             UserID: userId,
-            OwedAmount: Number((shareCents / 100).toFixed(2)),
+            OwedAmount: Number((shareCentsRounded / 100).toFixed(2)),
           });
         })
       );
@@ -1511,8 +1488,8 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
               type="number"
               value={totalAmount}
               onChange={(e) => setTotalAmount(e.target.value)}
-              min="0.01"
-              step="0.01"
+              min="1000"
+              step="1000"
               className="w-full bg-gray-700 border-gray-600 rounded-md px-4 py-2"
             />
           </div>
@@ -1574,12 +1551,11 @@ const AddPaymentForm = ({ db, users, setError, setActiveTab, appId }) => {
     e.preventDefault();
     // Robustly parse to integer cents
     const raw = String(amount).trim();
-    const normalizedRaw = raw
-      .replace(/,/g, ".")
-      .replace(/[^0-9.]/g, "");
+    const normalizedRaw = raw.replace(/,/g, ".").replace(/[^0-9.]/g, "");
     const [intPart = "0", decRaw = ""] = normalizedRaw.split(".");
     const decPart = (decRaw + "00").slice(0, 2);
-    const amountCents = (parseInt(intPart || "0", 10) || 0) * 100 +
+    const amountCents =
+      (parseInt(intPart || "0", 10) || 0) * 100 +
       (parseInt(decPart || "0", 10) || 0);
 
     if (!fromUserId || !toUserId || amountCents === 0)
