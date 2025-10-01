@@ -355,11 +355,13 @@ export default function ExpenseManagerApp() {
 
     const userBalances = {};
     users.forEach((user) => (userBalances[user.id] = 0));
+    // Build per-expense who-owes-who list
+    const perExpenseDebtsByExpense = [];
 
     expenses.forEach((expense) => {
       const payerId = expense.PayerID;
       if (!(payerId in userBalances)) userBalances[payerId] = 0;
-
+      
       // Prefer stored splits if they sum exactly to total; otherwise recompute equal shares by cents
       const totalCents = Math.round((Number(expense.TotalAmount) || 0) * 100);
       const n = expense.splits.length || 0;
@@ -381,6 +383,16 @@ export default function ExpenseManagerApp() {
         );
       }
 
+      // Prepare expense-level debt items
+      const expenseGroup = {
+        expenseId: expense.id,
+        description: expense.Description || "",
+        date: expense.DateOfExpense || null,
+        payerId,
+        payerName: users.find((u) => u.id === payerId)?.UserName || "Unknown",
+        items: [],
+      };
+
       expense.splits.forEach((split, idx) => {
         const splitUserId = split.UserID;
         const owedCents = sharesCents[idx] || 0;
@@ -388,11 +400,24 @@ export default function ExpenseManagerApp() {
 
         if (!(splitUserId in userBalances)) userBalances[splitUserId] = 0;
 
-        if (splitUserId !== payerId) {
+        if (splitUserId !== payerId && owedCents > 0) {
+          // Update balances
           userBalances[splitUserId] -= owedAmount;
           userBalances[payerId] += owedAmount;
+          // Add to per-expense debts list
+          expenseGroup.items.push({
+            from: splitUserId,
+            fromName:
+              users.find((u) => u.id === splitUserId)?.UserName || "Unknown",
+            to: payerId,
+            toName:
+              users.find((u) => u.id === payerId)?.UserName || "Unknown",
+            amount: Number((owedCents / 100).toFixed(2)),
+          });
         }
       });
+
+      if (expenseGroup.items.length > 0) perExpenseDebtsByExpense.push(expenseGroup);
     });
 
     payments.forEach((payment) => {
@@ -496,7 +521,15 @@ export default function ExpenseManagerApp() {
       });
     }
 
-    return { balances: balancesArray, simplifiedDebts };
+    // Flatten per-expense debts for convenient bulk actions
+    const perExpenseDebtsFlat = perExpenseDebtsByExpense.flatMap((g) => g.items);
+
+    return {
+      balances: balancesArray,
+      simplifiedDebts,
+      perExpenseDebtsByExpense,
+      perExpenseDebtsFlat,
+    };
   }, [users, expenses, payments]);
 
   // --- Render Logic ---
@@ -1023,48 +1056,55 @@ const Dashboard = ({
             <DollarSignIcon />
             Balance Summary
           </CardTitle>
-          {isAdmin && balances.simplifiedDebts.length > 0 && (
+          {isAdmin && balances.perExpenseDebtsFlat && balances.perExpenseDebtsFlat.length > 0 && (
             <div className="flex justify-end mb-3">
               <button
-                onClick={() => onSettleAllDebts(balances.simplifiedDebts)}
+                onClick={() => onSettleAllDebts(balances.perExpenseDebtsFlat)}
                 className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-1 px-3 rounded-md text-xs"
               >
                 Settle All
               </button>
             </div>
           )}
-          {balances.simplifiedDebts.length > 0 ? (
-            <ul className="space-y-3">
-              {balances.simplifiedDebts.map((debt, index) => (
-                <li
-                  key={index}
-                  className="flex items-center justify-between p-3 bg-gray-700 rounded-md text-sm flex-wrap gap-2"
-                >
-                  <div className="flex items-center">
-                    <span className="font-bold text-cyan-400">
-                      {debt.fromName}
-                    </span>
-                    <ArrowRightIcon />
-                    <span className="font-bold text-green-400">
-                      {debt.toName}
-                    </span>
+          {balances.perExpenseDebtsByExpense && balances.perExpenseDebtsByExpense.length > 0 ? (
+            <div className="space-y-4">
+              {balances.perExpenseDebtsByExpense.map((grp) => (
+                <div key={grp.expenseId} className="bg-gray-700/40 rounded-md p-3">
+                  <div className="flex items-center justify-between mb-2 text-sm text-gray-300">
+                    <div>
+                      <span className="font-semibold text-white">{grp.description || "(No description)"}</span>
+                      <span className="ml-2 text-xs text-gray-400">{grp.date ? new Date(grp.date).toLocaleDateString() : ""}</span>
+                    </div>
+                    <div className="text-xs text-gray-400">Paid by {grp.payerName}</div>
                   </div>
-                  <div className="flex items-center gap-4">
-                    <span className="font-mono text-lg">
-                      Rp{debt.amount.toFixed(2)}
-                    </span>
-                    {loggedInUserId === debt.to && (
-                      <button
-                        onClick={() => onSettleDebt(debt)}
-                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs"
+                  <ul className="space-y-2">
+                    {grp.items.map((debt, idx) => (
+                      <li
+                        key={`${grp.expenseId}-${idx}`}
+                        className="flex items-center justify-between p-2 bg-gray-700 rounded-md text-sm flex-wrap gap-2"
                       >
-                        paid
-                      </button>
-                    )}
-                  </div>
-                </li>
+                        <div className="flex items-center">
+                          <span className="font-bold text-cyan-400">{debt.fromName}</span>
+                          <ArrowRightIcon />
+                          <span className="font-bold text-green-400">{debt.toName}</span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <span className="font-mono text-base">Rp{debt.amount.toFixed(2)}</span>
+                          {loggedInUserId === debt.to && (
+                            <button
+                              onClick={() => onSettleDebt(debt)}
+                              className="bg-green-600 hover:bg-green-700 text-white font-bold py-1 px-3 rounded-md text-xs"
+                            >
+                              paid
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
           ) : (
             <p className="text-gray-400">Tidak ada yang berhutang!</p>
           )}
