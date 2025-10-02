@@ -370,26 +370,10 @@ export default function ExpenseManagerApp() {
       const payerId = expense.PayerID;
       if (!(payerId in userBalances)) userBalances[payerId] = 0;
 
-      // Prefer stored splits if they sum exactly to total; otherwise recompute equal shares by cents
-      const totalCents = Math.round((Number(expense.TotalAmount) || 0) * 100);
-      const n = expense.splits.length || 0;
-      const storedSumCents = expense.splits.reduce(
-        (sum, s) => sum + Math.round((Number(s.OwedAmount) || 0) * 100),
-        0
+      // Use stored splits exactly as the source of truth
+      const sharesCents = (expense.splits || []).map((s) =>
+        Math.round((Number(s.OwedAmount) || 0) * 100)
       );
-
-      let sharesCents = [];
-      if (n > 0 && storedSumCents === totalCents) {
-        sharesCents = expense.splits.map((s) =>
-          Math.round((Number(s.OwedAmount) || 0) * 100)
-        );
-      } else if (n > 0) {
-        const baseShare = Math.floor(totalCents / n);
-        const remainder = totalCents - baseShare * n;
-        sharesCents = expense.splits.map(
-          (_, idx) => baseShare + (idx < remainder ? 1 : 0)
-        );
-      }
 
       // Prepare expense-level debt items
       const expenseGroup = {
@@ -401,7 +385,7 @@ export default function ExpenseManagerApp() {
         items: [],
       };
 
-      expense.splits.forEach((split, idx) => {
+      (expense.splits || []).forEach((split, idx) => {
         const splitUserId = split.UserID;
         const owedCents = sharesCents[idx] || 0;
         const owedAmount = owedCents / 100;
@@ -1436,30 +1420,20 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
           PayerID: payerId,
         }
       );
-      // Compute equal split from integer cents and distribute remainder fairly
+      // Compute equal split from integer cents and distribute remainder fairly (no extra rounding)
       const n = splitWith.length;
       const baseShare = Math.floor(totalCents / n);
       const remainder = totalCents - baseShare * n; // number of users that get +1 cent
-
-      // Rounding rule: round each share to the nearest Rp1000 with threshold 500
-      // If remainder within 1000 band is > 500, round up; if < 500, round down; =500 => down.
-      const UNIT_THOUSAND_CENTS = 100000; // 1000 Rupiah in cents
-      const roundToThousandCents = (cents) => {
-        const rem = cents % UNIT_THOUSAND_CENTS;
-        if (rem > 50000) return cents - rem + UNIT_THOUSAND_CENTS;
-        return cents - rem; // <= 50000 rounds down
-      };
 
       // Use a stable order so remainder distribution is deterministic
       const recipients = [...splitWith];
       await Promise.all(
         recipients.map((userId, idx) => {
           const rawShareCents = baseShare + (idx < remainder ? 1 : 0);
-          const shareCentsRounded = roundToThousandCents(rawShareCents);
           return addDoc(collection(db, `${publicDataPath}/expenseSplits`), {
             ExpenseID: expenseDocRef.id,
             UserID: userId,
-            OwedAmount: Number((shareCentsRounded / 100).toFixed(2)),
+            OwedAmount: Number((rawShareCents / 100).toFixed(2)),
           });
         })
       );
@@ -1488,8 +1462,8 @@ const AddExpenseForm = ({ db, users, setError, setActiveTab, appId }) => {
               type="number"
               value={totalAmount}
               onChange={(e) => setTotalAmount(e.target.value)}
-              min="1000"
-              step="1000"
+              min="0.01"
+              step="0.01"
               className="w-full bg-gray-700 border-gray-600 rounded-md px-4 py-2"
             />
           </div>
