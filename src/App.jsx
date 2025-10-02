@@ -370,7 +370,7 @@ export default function ExpenseManagerApp() {
       const payerId = expense.PayerID;
       if (!(payerId in userBalances)) userBalances[payerId] = 0;
 
-      // Use stored splits exactly as the source of truth
+      // Use stored splits exactly as the source of truth (in cents)
       const sharesCents = (expense.splits || []).map((s) =>
         Math.round((Number(s.OwedAmount) || 0) * 100)
       );
@@ -1189,9 +1189,7 @@ const Dashboard = ({
                             </span>
                           </div>
                           <div className="flex items-center gap-4">
-                            <span className="font-mono text-base">
-                              Rp{debt.amount.toFixed(2)}
-                            </span>
+                            <span className="font-mono text-base">Rp{debt.amount.toFixed(2)}</span>
                             {loggedInUserId === debt.to && (
                               <button
                                 onClick={() => onSettleDebt(debt)}
@@ -1248,9 +1246,7 @@ const Dashboard = ({
                               ?.UserName
                           }
                         </td>
-                        <td className="p-2 font-mono whitespace-nowrap">
-                          Rp{expense.TotalAmount.toFixed(2)}
-                        </td>
+                        <td className="p-2 font-mono whitespace-nowrap">Rp{expense.TotalAmount.toFixed(2)}</td>
                         <td className="p-2 text-xs text-gray-400">
                           {expense.splits
                             .map(
@@ -1317,9 +1313,7 @@ const Dashboard = ({
                               ?.UserName
                           }
                         </td>
-                        <td className="p-2 font-mono whitespace-nowrap">
-                          Rp{payment.Amount.toFixed(2)}
-                        </td>
+                        <td className="p-2 font-mono whitespace-nowrap">Rp{payment.Amount.toFixed(2)}</td>
                         {isAdmin && (
                           <td className="p-2">
                             <DeleteButton
@@ -1549,6 +1543,8 @@ const AddPaymentForm = ({ db, users, setError, setActiveTab, appId }) => {
       setError("Failed to record payment.");
     }
   };
+
+  // (admin migration removed per revert to decimal precision)
   return (
     <Card>
       <CardTitle>Record a Payment</CardTitle>
